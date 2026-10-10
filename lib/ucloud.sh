@@ -12,7 +12,7 @@ _BUPTY_UCLOUD_LOADED=1
 UCLOUD_ORIGIN="https://ucloud.bupt.edu.cn"
 UCLOUD_API="https://apiucloud.bupt.edu.cn"
 # 官方公开 OAuth client（解码为 portal:portal_secret），非用户凭据。
-UCLOUD_BASIC_AUTH="Basic  cG9udGFsOnBvcnRhbF9zZWNyZXQ="
+UCLOUD_BASIC_AUTH="Basic  cG9ydGFsOnBvcnRhbF9zZWNyZXQ="
 UCLOUD_LOGIN_URL="https://auth.bupt.edu.cn/authserver/login?service=https%3A%2F%2Fucloud.bupt.edu.cn"
 UCLOUD_TOKEN_URL="https://apiucloud.bupt.edu.cn/ykt-basics/oauth/token"
 

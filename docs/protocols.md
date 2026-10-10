@@ -229,7 +229,7 @@ Body(form): username=<学号> password=<教学云密码> type=username_password 
 ```
 POST https://apiucloud.bupt.edu.cn/ykt-basics/oauth/token
 Content-Type: application/x-www-form-urlencoded
-Authorization: Basic cG9udGFsOnBvcnRhbF9zZWNyZXQ=
+Authorization: Basic cG9ydGFsOnBvcnRhbF9zZWNyZXQ=
 Tenant-Id: 000000
 Accept: application/json, text/plain, */*
 Referer: https://ucloud.bupt.edu.cn/
@@ -243,7 +243,7 @@ Body(form): ticket=<ticket> grant_type=third
 ### 2.4 API 请求头（后续统一）
 
 ```
-Authorization: Basic cG9udGFsOnBvcnRhbF9zZWNyZXQ=
+Authorization: Basic cG9ydGFsOnBvcnRhbF9zZWNyZXQ=
 Tenant-Id: 000000
 Accept: application/json, text/plain, */*
 Referer: https://ucloud.bupt.edu.cn/
