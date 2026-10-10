@@ -12,6 +12,3 @@ _stub_render() {
 _stub_handle() {
   return 0
 }
-
-render_public() { _stub_render public; }
-handle_public_key() { return 0; }

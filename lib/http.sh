@@ -19,11 +19,13 @@ HTTP_BODY=""
 HTTP_HEADERS=""
 
 # 核心请求：参数透传给 curl。用法：http_request [curl 参数...]
+# 默认限制响应体大小（BUPTY_HTTP_MAX_BYTES 可覆盖），防恶意/故障端点返回超大 body。
 http_request() {
   local bodyfile hdrfile rc
   bodyfile="$(mktemp)"
   hdrfile="$(mktemp)"
-  HTTP_STATUS="$(curl -sS --compressed -D "${hdrfile}" -o "${bodyfile}" \
+  HTTP_STATUS="$(curl -sS --compressed --max-filesize "${BUPTY_HTTP_MAX_BYTES:-8388608}" \
+    -D "${hdrfile}" -o "${bodyfile}" \
     -w '%{http_code}' "$@" 2>/dev/null)" || rc=$?
   HTTP_STATUS="${HTTP_STATUS:-000}"
   # 网络错误时 curl 输出 "000"，但有时代码可能为空，统一兜底。

@@ -6,7 +6,7 @@ set -euo pipefail
 _TUI_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # 加载核心库。
-for _lib in core http session creds parse sjd ucloud ui; do
+for _lib in core http session creds parse sjd ucloud public ui; do
   # shellcheck disable=SC1090
   source "${_TUI_DIR}/lib/${_lib}.sh"
 done
