@@ -7,14 +7,18 @@ BUPTY_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${BUPTY_HOME}/tests/lib/testlib.sh"
 
 # 在非 TTY 下渲染一帧（禁用颜色，便于文本断言）。
+# 用空的 XDG_CONFIG_HOME 保证无凭据、无网络请求，渲染「未登录」态，结果确定。
 render_view() {
   local view="$1"
-  BUPTY_NO_COLOR=1 COLUMNS=80 LINES=24 BUPTY_HOME="${BUPTY_HOME}" bash -c '
+  local empty_cfg
+  empty_cfg="$(mktemp -d)"
+  BUPTY_NO_COLOR=1 COLUMNS=80 LINES=24 BUPTY_HOME="${BUPTY_HOME}" XDG_CONFIG_HOME="${empty_cfg}" bash -c '
     set -uo pipefail
     source "${BUPTY_HOME}/tui.sh"
     TUI_VIEW="'"${view}"'"
     tui_render_once
   ' 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g'
+  rm -rf "${empty_cfg}"
 }
 
 strip_ansi() {
@@ -33,9 +37,15 @@ settings="$(render_view settings)"
 assert_ok grep -q '账号设置' <<< "${settings}"
 assert_ok grep -q '登录' <<< "${settings}"
 
-t_begin "占位视图渲染"
+t_begin "作业视图渲染（未登录态）"
 stub="$(render_view assignments)"
 assert_ok grep -q '作业 DDL' <<< "${stub}"
+assert_ok grep -q '请先在设置中登录' <<< "${stub}"
+
+t_begin "课表视图渲染（未登录态）"
+sched="$(render_view schedule)"
+assert_ok grep -q '课表' <<< "${sched}"
+assert_ok grep -q '请先在设置中登录' <<< "${sched}"
 
 t_begin "渲染输出非空且无 NUL 字节"
 if [[ -n "${home}" ]]; then

@@ -31,6 +31,14 @@ assert_eq "$(_weeks '1-17单,2-18双')" "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,
 assert_eq "$(_field_weeks '' '第1周,第3周')" "1,3" "第1周,第3周（回退提取）"
 assert_eq "$(_field_weeks '2-18双' '1,3,5')" "2,4,6,8,10,12,14,16,18" "优先 classWeek"
 
+# 回归：parse_sjd_week_numbers 末尾必须有换行，否则 while read 丢末行。
+_count_weeks_via_read() {
+  local c=0
+  while IFS= read -r w; do c=$((c + 1)); done < <(parse_sjd_week_numbers "$1" "$2")
+  printf '%s' "$c"
+}
+assert_eq "$(_count_weeks_via_read '' '1-16')" "16" "while read 读到全部 16 个周次"
+
 # ---- 节次解析 ----
 t_begin "节次解析"
 assert_eq "$(parse_sjd_slots '1030405')" "2 4" "1030405 -> 节3..5"

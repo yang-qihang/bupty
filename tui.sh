@@ -163,7 +163,8 @@ tui_main() {
       ESC|BACKSPACE) tui_back ;;
       *)
         if declare -F "handle_${TUI_VIEW}_key" >/dev/null 2>&1; then
-          "handle_${TUI_VIEW}_key" "${key}"
+          # 视图 handler 失败（如刷新失败）不应在 set -e 下终止整个 TUI。
+          "handle_${TUI_VIEW}_key" "${key}" || true
         fi
         ;;
     esac

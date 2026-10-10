@@ -72,7 +72,8 @@ parse_sjd_week_numbers() {
   if [[ -z "${weeks}" ]]; then
     weeks="$(printf '%s' "${cwd}" | grep -oE '[0-9]+' | sort -n -u)"
   fi
-  printf '%s' "${weeks}"
+  # 末尾补换行：保证 while read 能读到最后一个周次（否则末行会被丢弃）。
+  [[ -n "${weeks}" ]] && printf '%s\n' "${weeks}"
 }
 
 # ---------------------------------------------------------------------------
