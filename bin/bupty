@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# bin/bupty —— bupty 入口。定位安装目录、加载库并进入 TUI。
+set -euo pipefail
+
+# 定位仓库根（bin/ 的上一级）。
+_BUPTY_BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BUPTY_HOME="$(cd "${_BUPTY_BIN_DIR}/.." && pwd)"
+export BUPTY_HOME
+
+# shellcheck disable=SC1090
+source "${BUPTY_HOME}/tui.sh"
+
+tui_main "$@"

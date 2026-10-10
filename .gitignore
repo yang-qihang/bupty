@@ -1,0 +1,22 @@
+# 凭据、缓存、测试产物 —— 绝不提交
+credentials.json
+*.tmp
+*.log
+
+# 原始需求文档（含账号密码等敏感信息，不入库）
+spec.md
+
+# 测试与构建产物
+tests/tmp/
+tests/__pycache__/
+tests/.pytest_cache/
+*.pyc
+
+# 本地缓存目录
+.cache/
+cache/
+
+# 编辑器
+*.swp
+*~
+.DS_Store
