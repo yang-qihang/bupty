@@ -13,9 +13,6 @@ _stub_handle() {
   return 0
 }
 
-render_assignments() { _stub_render assignments; }
-handle_assignments_key() { return 0; }
-
 render_schedule() { _stub_render schedule; }
 handle_schedule_key() { return 0; }
 
