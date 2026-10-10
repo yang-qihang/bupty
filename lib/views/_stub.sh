@@ -13,9 +13,6 @@ _stub_handle() {
   return 0
 }
 
-render_classrooms() { _stub_render classrooms; }
-handle_classrooms_key() { return 0; }
-
 render_grades() { _stub_render grades; }
 handle_grades_key() { return 0; }
 

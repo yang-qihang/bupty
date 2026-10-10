@@ -154,6 +154,126 @@ parse_building_name() {
 }
 
 # ---------------------------------------------------------------------------
+# 空教室解析（todayClassrooms）
+# ---------------------------------------------------------------------------
+
+# 由节点名解析节次（0-based）。取首个数字序列，1..14 返回 数字-1，否则输出空。
+parse_node_to_slot() {
+  local v="${1:-}"
+  local n="" m
+  while IFS= read -r m; do n="${m}"; break; done < <(printf '%s' "${v}" | grep -oE '[0-9]+' 2>/dev/null || true)
+  [[ -z "${n}" ]] && return 0
+  n=$((10#$n))
+  if (( n >= 1 && n <= 14 )); then
+    printf '%s' "$((n - 1))"
+  fi
+}
+
+# 解析单个空教室项，输出 "building|room|size"（size 空则空串）；解析失败输出空。
+parse_classroom() {
+  local raw="${1:-}"
+  local clean
+  clean="$(core_trim "${raw}")"
+  [[ -z "${clean}" ]] && return 0
+
+  # 先剥 "(容量)" 记 size（仅首个匹配）。
+  local size="" matched
+  if [[ "${clean}" =~ [\(（][[:space:]]*([0-9]+)[[:space:]]*[\)）] ]]; then
+    size="${BASH_REMATCH[1]}"
+    matched="${BASH_REMATCH[0]}"
+    clean="${clean//${matched}/}"
+  fi
+
+  # 全角横线归一为 '-'.
+  clean="${clean//－/-}"; clean="${clean//—/-}"; clean="${clean//–/-}"
+
+  # 按 '-' 切分、trim、去空段。用 read -ra 避免 glob 展开（网络字符串中的 [*? 不触发文件名匹配）。
+  local -a parts=() tmp=()
+  local p IFS=-
+  read -ra tmp <<< "${clean}"
+  for p in "${tmp[@]}"; do
+    p="$(core_trim "${p}")"
+    [[ -z "${p}" ]] && continue
+    parts+=("${p}")
+  done
+
+  local building room
+  if (( ${#parts[@]} >= 3 )) && { [[ "${parts[0]}" == "校本部" || "${parts[0]}" == "西土城" || "${parts[0]}" == "沙河" ]]; }; then
+    # 校区前缀 + 楼名占前两段，房间号从第三段起。
+    building="${parts[0]}-${parts[1]}"
+    IFS=-; room="${parts[*]:2}"; unset IFS
+  elif [[ "${clean}" == *-* ]]; then
+    building="${clean%%-*}"
+    room="${clean#*-}"
+  else
+    building="未知教学楼"
+    room="${clean}"
+  fi
+  building="$(core_trim "${building}")"
+  room="$(core_trim "${room}")"
+  [[ -z "${building}" ]] && building="未知教学楼"
+  [[ -z "${room}" ]] && room="${clean}"
+  printf '%s|%s|%s' "${building}" "${room}" "${size}"
+}
+
+# 提取房间号：building 以「教」开头时先去楼号前缀，再取首个 \d{3}(-\d{3})?。
+parse_extract_room_name() {
+  local value="${1:-}" building="${2:-}"
+  local clean
+  clean="$(core_trim "${value}")"
+  clean="${clean//－/-}"; clean="${clean//—/-}"; clean="${clean//–/-}"
+  if [[ "${building}" == 教* ]]; then
+    local bnum="${building#教}"
+    if [[ "${clean}" == "${bnum}-"* ]]; then
+      clean="${clean#"${bnum}-"}"
+    elif [[ "${clean}" == "教${bnum}-"* ]]; then
+      clean="${clean#"教${bnum}-"}"
+    fi
+  fi
+  if [[ "${clean}" =~ [0-9]{3}(-[0-9]{3})? ]]; then
+    printf '%s' "${BASH_REMATCH[0]}"
+  fi
+}
+
+# 教学实验综合楼（裸名）按房间号首字符分 N/S 楼；其余原样返回 "building|room"。
+parse_teaching_experiment_side() {
+  local building="${1:-}" room="${2:-}"
+  if [[ "${building}" != "教学实验综合楼" ]]; then
+    printf '%s|%s' "${building}" "${room}"
+    return 0
+  fi
+  local clean rest side
+  clean="$(core_trim "${room}")"
+  clean="${clean//－/-}"; clean="${clean//—/-}"; clean="${clean//–/-}"
+  clean="${clean// /}"; clean="${clean//　/}"
+  [[ -z "${clean}" ]] && { printf '%s|%s' "${building}" "${room}"; return 0; }
+  # 取首字符分侧：用模式匹配（locale 无关、字节安全），避免 C locale 下中文字符按字节误切。
+  case "${clean}" in
+    N*|n*) side="N"; rest="${clean:1}" ;;
+    北*)    side="N"; rest="${clean#北}" ;;
+    S*|s*) side="S"; rest="${clean:1}" ;;
+    南*)    side="S"; rest="${clean#南}" ;;
+    *) printf '%s|%s' "${building}" "${room}"; return 0 ;;
+  esac
+  # 去掉房间号前的 '-'。
+  rest="${rest#"${rest%%[!-]*}"}"
+  if [[ -z "${rest}" || ! "${rest}" =~ ^[0-9] ]]; then
+    printf '%s|%s' "${building}" "${room}"
+    return 0
+  fi
+  printf '教学实验综合楼%s|%s' "${side}" "${rest}"
+}
+
+# 原始楼名是否在白名单内：是输出 0，否则输出 1。
+parse_original_building() {
+  local v="${1:-}"
+  case "${v}" in
+    教1|教2|教3|教4|主楼|综合教学楼N|综合教学楼S|教学实验综合楼N|教学实验综合楼S|智慧教学楼) printf '0' ;;
+    *) printf '1' ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
 # 学期推断
 # ---------------------------------------------------------------------------
 

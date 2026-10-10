@@ -429,3 +429,117 @@ sjd_fetch_schedule() {
     --argjson courses "${courses}" \
     '{term_id:$term_id, term_start_date:$term_start_date, current_week:$current_week, courses:$courses}'
 }
+
+# ---------------------------------------------------------------------------
+# 空教室（todayClassrooms）
+# ---------------------------------------------------------------------------
+
+# 解析单个校区的空教室 payload，输出房间 JSON 数组（按 building/room 升序）。
+_sjd_parse_classrooms_payload() {
+  local payload="$1"
+  local tmp
+  tmp="$(mktemp)"
+  local line nodename classrooms slot
+  while IFS= read -r line; do
+    [[ -z "${line}" ]] && continue
+    # 学校接口字段大小写不统一（NODENAME/nodeName/nodename、CLASSROOMS/classrooms/Classrooms），
+    # 统一转大写键后取值。
+    nodename="$(printf '%s' "${line}" | jq -r 'to_entries | map({key:(.key|ascii_upcase), value:.value}) | from_entries | .NODENAME // empty' 2>/dev/null || true)"
+    classrooms="$(printf '%s' "${line}" | jq -r 'to_entries | map({key:(.key|ascii_upcase), value:.value}) | from_entries | .CLASSROOMS // empty' 2>/dev/null || true)"
+    slot="$(parse_node_to_slot "${nodename}")"
+    [[ -z "${slot}" ]] && continue
+
+    local room_raw parsed building_raw room_size
+    local -a room_list=()
+    local IFS=,
+    read -ra room_list <<< "${classrooms}"
+    for room_raw in "${room_list[@]}"; do
+      room_raw="$(core_trim "${room_raw}")"
+      [[ -z "${room_raw}" ]] && continue
+      parsed="$(parse_classroom "${room_raw}")"
+      [[ -z "${parsed}" ]] && continue
+      IFS='|' read -r building_raw room_raw room_size <<< "${parsed}"
+
+      local building
+      building="$(parse_building_name "${building_raw}")"
+      local side_out
+      side_out="$(parse_teaching_experiment_side "${building}" "${room_raw}")"
+      building="${side_out%%|*}"
+      room_raw="${side_out#*|}"
+      if [[ "$(parse_original_building "${building}")" != "0" ]]; then
+        continue
+      fi
+
+      local room size_json
+      room="$(parse_extract_room_name "${room_raw}" "${building}")"
+      [[ -z "${room}" ]] && continue
+      if [[ -n "${room_size}" ]]; then
+        size_json="${room_size}"
+      else
+        size_json="null"
+      fi
+      jq -n --arg building "${building}" --arg room "${room}" --argjson size "${size_json}" --argjson slot "${slot}" \
+        '{building:$building, room:$room, size:$size, slot:$slot}' >> "${tmp}" 2>/dev/null || true
+    done
+  done < <(printf '%s' "${payload}" | jq -c '.data[]?' 2>/dev/null || true)
+
+  local out
+  out="$(jq -s '
+    reduce .[] as $r ({};
+      .[$r.building + "-" + $r.room] |= (
+        if . == null then
+          {building: $r.building, room: $r.room, size: $r.size, slots: [$r.slot]}
+        else
+          {building: $r.building, room: $r.room,
+           size: (if .size != null then .size else $r.size end),
+           slots: (.slots + [$r.slot])}
+        end
+      )
+    )
+    | to_entries | map(.value)
+    | map({building, room, size, available_slots: (.slots | unique | sort)})
+    | sort_by(.building, .room)
+  ' "${tmp}" 2>/dev/null || true)"
+  rm -f "${tmp}"
+  [[ -z "${out}" ]] && out="[]"
+  printf '%s' "${out}"
+}
+
+# 拉取并解析两校区空教室。成功输出 JSON 对象到 stdout，失败返回 1 并置 BUPTY_ERR。
+sjd_fetch_classrooms() {
+  local account="$1" password="$2"
+  if core_is_blank "${account}" || core_is_blank "${password}"; then
+    core_err "请先在设置中登录。"
+    return 1
+  fi
+  if ! sjd_ensure_token "${account}" "${password}" >/dev/null; then
+    return 1
+  fi
+
+  local -a campus_ids=() campus_names=() campus_payloads=()
+  local entry id name
+  for entry in "${CAMPUSES[@]}"; do
+    id="${entry%%|*}"; name="${entry#*|}"
+    if ! sjd_request_json GET "${EMPTY_CLASSROOM_TODAY_URL}?campusId=${id}" "${account}" "${password}"; then
+      return 1
+    fi
+    campus_ids+=("${id}")
+    campus_names+=("${name}")
+    campus_payloads+=("${HTTP_BODY}")
+  done
+
+  local i rooms
+  local campuses_json="["
+  for i in "${!campus_ids[@]}"; do
+    rooms="$(_sjd_parse_classrooms_payload "${campus_payloads[$i]}")"
+    if (( i > 0 )); then campuses_json+=","; fi
+    campuses_json+="$(jq -cn --arg id "${campus_ids[$i]}" --arg name "${campus_names[$i]}" --argjson rooms "${rooms}" \
+      '{campus_id:$id, campus_name:$name, rooms:$rooms}')"
+  done
+  campuses_json+="]"
+
+  jq -n \
+    --arg target_date "$(core_today)" \
+    --argjson campuses "${campuses_json}" \
+    '{target_date:$target_date, campuses:$campuses}'
+}
