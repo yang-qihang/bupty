@@ -78,6 +78,14 @@ _classrooms_slot_text() {
 
 # 拉取并缓存（不渲染）。成功 0，失败置 BUPTY_ERR 且保留旧数据。
 classrooms_fetch() {
+  # 账号切换时先清空旧账号数据，避免跨账号残留泄漏。
+  if [[ "${CLASSROOMS_ACCOUNT}" != "${BUPTY_ACCOUNT}" ]]; then
+    CLASSROOMS_DATA=""
+    CLASSROOMS_CAMPUS=0
+    CLASSROOMS_BUILDING=""
+    CLASSROOMS_SEL=0
+    CLASSROOMS_OFFSET=0
+  fi
   local tmp data
   tmp="$(mktemp)"
   if sjd_fetch_classrooms "${BUPTY_ACCOUNT}" "${BUPTY_PASSWORD}" > "${tmp}"; then

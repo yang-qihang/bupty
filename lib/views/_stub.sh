@@ -13,11 +13,5 @@ _stub_handle() {
   return 0
 }
 
-render_grades() { _stub_render grades; }
-handle_grades_key() { return 0; }
-
-render_exams() { _stub_render exams; }
-handle_exams_key() { return 0; }
-
 render_public() { _stub_render public; }
 handle_public_key() { return 0; }

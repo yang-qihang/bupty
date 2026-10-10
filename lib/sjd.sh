@@ -543,3 +543,267 @@ sjd_fetch_classrooms() {
     --argjson campuses "${campuses_json}" \
     '{target_date:$target_date, campuses:$campuses}'
 }
+
+# ---------------------------------------------------------------------------
+# 成绩与学期（currentTerm / semesterList / student/termGPA）
+# ---------------------------------------------------------------------------
+
+# 校验学期号安全（字母数字 + -_，长度 1..64），防止畸形值拼进 URL。
+_sjd_valid_term() {
+  [[ "${1:-}" =~ ^[A-Za-z0-9_-]{1,64}$ ]]
+}
+
+# 解析学期列表 payload（semesterList），去重、name 空则用 id。输出 JSON 数组。
+_sjd_parse_terms_list() {
+  local list_payload="$1"
+  local out
+  out="$(printf '%s' "${list_payload}" | jq -c '
+    [.data[]? | {id: ((.semesterId // "") | tostring), name: ((.semesterName // "") | tostring)}]
+    | map(.id |= gsub("^[[:space:]]+|[[:space:]]+$"; ""))
+    | map(.name |= gsub("^[[:space:]]+|[[:space:]]+$"; ""))
+    | map(if .name == "" then .name = .id else . end)
+    | map(select(.id != ""))
+    | group_by(.id) | map(.[0])
+  ' 2>/dev/null || true)"
+  if [[ -z "${out}" ]]; then out="[]"; fi
+  printf '%s' "${out}"
+}
+
+# 解析当前学期 + 学期列表为 {"current_term_id", "terms":[{id,name}]}。失败置 BUPTY_ERR 返回 1。
+sjd_parse_grade_terms() {
+  local current_payload="$1" list_payload="$2"
+  local current_term_id
+  current_term_id="$(printf '%s' "${current_payload}" | jq -r '.data[0].semesterId // empty' 2>/dev/null || true)"
+  current_term_id="$(core_trim "${current_term_id}")"
+  if core_is_blank "${current_term_id}"; then
+    core_err "教务未返回当前学期。"
+    return 1
+  fi
+  local terms_json has_current
+  terms_json="$(_sjd_parse_terms_list "${list_payload}")"
+  has_current="$(printf '%s' "${terms_json}" | jq --arg t "${current_term_id}" 'any(.id == $t)' 2>/dev/null || true)"
+  if [[ "${has_current}" != "true" ]]; then
+    terms_json="$(printf '%s' "${terms_json}" | jq -c --arg t "${current_term_id}" '[{id:$t, name:$t}] + .' 2>/dev/null || true)"
+  fi
+  jq -n --arg t "${current_term_id}" --argjson terms "${terms_json}" \
+    '{current_term_id:$t, terms:$terms}'
+}
+
+# 解析成绩 payload（student/termGPA）为 {"term_id","record_type","average_grade_point","items":[...]}。
+# fraction/credit 可能是数字或字符串，一律转字符串保留原值；courseName 空则报错。
+sjd_parse_grades() {
+  local payload="$1" term="$2" record_type="$3"
+  case "${record_type}" in
+    0|1|"") ;;
+    *) core_err "成绩记录类型不正确。"; return 1 ;;
+  esac
+  local avg
+  avg="$(printf '%s' "${payload}" | jq -r '(.data[0].pjxfjd // null) | if . == null then "" else tostring end' 2>/dev/null || true)"
+  avg="$(core_trim "${avg}")"
+
+  local tmp
+  tmp="$(mktemp)"
+  local -A seen=()
+  local line name rid id
+  while IFS= read -r line; do
+    [[ -z "${line}" ]] && continue
+    name="$(printf '%s' "${line}" | jq -r '.name // ""' 2>/dev/null || true)"
+    name="$(core_trim "${name}")"
+    if [[ -z "${name}" ]]; then
+      rm -f "${tmp}"
+      core_err "成绩课程名称缺失。"
+      return 1
+    fi
+    rid="$(printf '%s' "${line}" | jq -r '.rid // ""' 2>/dev/null || true)"
+    rid="$(core_trim "${rid}")"
+    if [[ -n "${rid}" ]]; then
+      id="${rid}"
+    else
+      local score credits course_code course_attribute course_nature exam_nature semester_name grade_status
+      score="$(printf '%s' "${line}" | jq -r '.score // ""' 2>/dev/null || true)"
+      credits="$(printf '%s' "${line}" | jq -r '.credits // ""' 2>/dev/null || true)"
+      course_code="$(printf '%s' "${line}" | jq -r '.course_code // ""' 2>/dev/null || true)"
+      course_attribute="$(printf '%s' "${line}" | jq -r '.course_attribute // ""' 2>/dev/null || true)"
+      course_nature="$(printf '%s' "${line}" | jq -r '.course_nature // ""' 2>/dev/null || true)"
+      exam_nature="$(printf '%s' "${line}" | jq -r '.exam_nature // ""' 2>/dev/null || true)"
+      semester_name="$(printf '%s' "${line}" | jq -r '.semester_name // ""' 2>/dev/null || true)"
+      grade_status="$(printf '%s' "${line}" | jq -r '.grade_status // ""' 2>/dev/null || true)"
+      id="$(_sjd_stable_id "${name}|${course_code}|${score}|${credits}|${course_attribute}|${course_nature}|${exam_nature}|${semester_name}|${grade_status}")"
+    fi
+    if [[ -n "${id}" && -z "${seen[${id}]:-}" ]]; then
+      seen[${id}]=1
+      printf '%s\n' "$(printf '%s' "${line}" | jq -c --arg id "${id}" --arg name "${name}" 'del(.rid) | .id = $id | .name = $name' 2>/dev/null || true)" >> "${tmp}"
+    fi
+  done < <(printf '%s' "${payload}" | jq -c '
+    def tostr: if . == null then "" else tostring end;
+    def trimstr: gsub("^[[:space:]]+|[[:space:]]+$"; "");
+    .data[0].achievement[]?
+    | {
+        rid: (.cj0708id | tostr | trimstr),
+        name: (.courseName | tostr | trimstr),
+        score: (.fraction | tostr),
+        credits: (.credit | tostr),
+        course_code: (.kcbh | tostr | trimstr),
+        course_attribute: (.curriculumAttributes | tostr | trimstr),
+        course_nature: (.courseNature | tostr | trimstr),
+        exam_nature: (.examinationNature | tostr | trimstr),
+        semester_name: (.curSemesterName | tostr | trimstr),
+        grade_status: (.cjbs | tostr | trimstr)
+      }
+  ' 2>/dev/null || true)
+
+  local items
+  items="$(jq -s -c '.' "${tmp}" 2>/dev/null || true)"
+  rm -f "${tmp}"
+  if [[ -z "${items}" ]]; then items="[]"; fi
+  jq -n --arg t "${term}" --arg rt "${record_type}" --arg avg "${avg}" --argjson items "${items}" \
+    '{term_id:$t, record_type:$rt, average_grade_point:$avg, items:$items}'
+}
+
+# 拉取并解析学期列表。成功输出 JSON 对象到 stdout，失败返回 1 并置 BUPTY_ERR。
+sjd_fetch_grade_terms() {
+  local account="$1" password="$2"
+  if core_is_blank "${account}" || core_is_blank "${password}"; then
+    core_err "请先在设置中登录。"
+    return 1
+  fi
+  if ! sjd_ensure_token "${account}" "${password}" >/dev/null; then
+    return 1
+  fi
+  if ! sjd_request_json POST "${SJD_BASE}/currentTerm" "${account}" "${password}"; then
+    return 1
+  fi
+  local current_payload="${HTTP_BODY}"
+  if ! sjd_request_json POST "${SJD_BASE}/semesterList" "${account}" "${password}"; then
+    return 1
+  fi
+  local list_payload="${HTTP_BODY}"
+  if ! sjd_parse_grade_terms "${current_payload}" "${list_payload}"; then
+    return 1
+  fi
+}
+
+# 拉取并解析指定学期/记录类型的成绩。record_type：0=首次、1=最好、""=全部。
+sjd_fetch_grades() {
+  local account="$1" password="$2" term_id="$3" record_type="$4"
+  if core_is_blank "${account}" || core_is_blank "${password}"; then
+    core_err "请先在设置中登录。"
+    return 1
+  fi
+  if ! _sjd_valid_term "${term_id}"; then
+    core_err "请选择学校返回的有效学期。"
+    return 1
+  fi
+  case "${record_type}" in
+    0|1|"") ;;
+    *) core_err "成绩记录类型不正确。"; return 1 ;;
+  esac
+  if ! sjd_ensure_token "${account}" "${password}" >/dev/null; then
+    return 1
+  fi
+  if ! sjd_request_json POST "${SJD_BASE}/student/termGPA?semester=${term_id}&type=${record_type}" "${account}" "${password}"; then
+    return 1
+  fi
+  if ! sjd_parse_grades "${HTTP_BODY}" "${term_id}" "${record_type}"; then
+    return 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# 考试安排（student/examinationArrangement）
+# ---------------------------------------------------------------------------
+
+# 校验 YYYY-MM-DD 真实日期（1900..2200）。
+_sjd_valid_date() {
+  local v="$1"
+  [[ "${v}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || return 1
+  local y="${v:0:4}"
+  (( 10#$y >= 1900 && 10#$y <= 2200 )) || return 1
+  [[ "$(date -d "${v}" +%Y-%m-%d 2>/dev/null)" == "${v}" ]]
+}
+
+# 解析考试 payload（examinationArrangement）为 {"term_id","items":[{id,name,date,start_time,end_time,room,time_text}]}。
+# time 用 parse_exam_time 解析；time 为空时回退 ksqssj/zssj1/zssj2 三字段；courseName 空则报错。
+sjd_parse_exams() {
+  local payload="$1" term="$2"
+  local tmp
+  tmp="$(mktemp)"
+  local -A seen=()
+  local line name room time_text
+  while IFS= read -r line; do
+    [[ -z "${line}" ]] && continue
+    name="$(printf '%s' "${line}" | jq -r '.courseName // ""' 2>/dev/null || true)"
+    name="$(core_trim "${name}")"
+    if [[ -z "${name}" ]]; then
+      rm -f "${tmp}"
+      core_err "考试课程名称缺失。"
+      return 1
+    fi
+    room="$(printf '%s' "${line}" | jq -r '.examinationPlace // ""' 2>/dev/null || true)"
+    room="$(core_trim "${room}")"
+    time_text="$(printf '%s' "${line}" | jq -r '.time // ""' 2>/dev/null || true)"
+    time_text="$(core_trim "${time_text}")"
+
+    local aux=""
+    if [[ -z "${time_text}" ]]; then
+      local ksqssj zssj1 zssj2 sm em
+      ksqssj="$(printf '%s' "${line}" | jq -r '.ksqssj // ""' 2>/dev/null || true)"
+      zssj1="$(printf '%s' "${line}" | jq -r '.zssj1 // ""' 2>/dev/null || true)"
+      zssj2="$(printf '%s' "${line}" | jq -r '.zssj2 // ""' 2>/dev/null || true)"
+      ksqssj="$(core_trim "${ksqssj}")"; zssj1="$(core_trim "${zssj1}")"; zssj2="$(core_trim "${zssj2}")"
+      # 三字段都合法且 start<end 时用它们作为日期/起止时刻。
+      if _sjd_valid_date "${ksqssj}" && [[ "${zssj1}" =~ ^[0-9]{2}:[0-9]{2}$ && "${zssj2}" =~ ^[0-9]{2}:[0-9]{2}$ ]]; then
+        sm="$(parse_minutes "${zssj1}" 2>/dev/null)" || sm=""
+        em="$(parse_minutes "${zssj2}" 2>/dev/null)" || em=""
+        if [[ -n "${sm}" && -n "${em}" ]] && (( sm < em && sm < 1440 )); then
+          aux="${ksqssj}|${zssj1}|${zssj2}"
+        fi
+      fi
+      time_text="$(core_trim "${ksqssj} ${zssj1} ${zssj2}")"
+    fi
+
+    local date start_time end_time parsed
+    if [[ -n "${aux}" ]]; then
+      IFS='|' read -r date start_time end_time <<< "${aux}"
+    else
+      parsed="$(parse_exam_time "${time_text}")"
+      IFS='|' read -r date start_time end_time <<< "${parsed}"
+    fi
+
+    local id
+    id="$(_sjd_stable_id "${name}|${date}|${start_time}|${end_time}|${room}|${time_text}")"
+    if [[ -z "${seen[${id}]:-}" ]]; then
+      seen[${id}]=1
+      jq -n --arg id "${id}" --arg name "${name}" --arg date "${date}" --arg s "${start_time}" --arg e "${end_time}" --arg room "${room}" --arg t "${time_text}" \
+        '{id:$id, name:$name, date:$date, start_time:$s, end_time:$e, room:$room, time_text:$t}' >> "${tmp}" 2>/dev/null || true
+    fi
+  done < <(printf '%s' "${payload}" | jq -c '.data[]?' 2>/dev/null || true)
+
+  local items
+  items="$(jq -s -c '.' "${tmp}" 2>/dev/null || true)"
+  rm -f "${tmp}"
+  if [[ -z "${items}" ]]; then items="[]"; fi
+  jq -n --arg t "${term}" --argjson items "${items}" '{term_id:$t, items:$items}'
+}
+
+# 拉取并解析指定学期考试安排。成功输出 JSON 对象到 stdout，失败返回 1 并置 BUPTY_ERR。
+sjd_fetch_exams() {
+  local account="$1" password="$2" term_id="$3"
+  if core_is_blank "${account}" || core_is_blank "${password}"; then
+    core_err "请先在设置中登录。"
+    return 1
+  fi
+  if ! _sjd_valid_term "${term_id}"; then
+    core_err "请选择学校返回的有效学期。"
+    return 1
+  fi
+  if ! sjd_ensure_token "${account}" "${password}" >/dev/null; then
+    return 1
+  fi
+  if ! sjd_request_json POST "${SJD_BASE}/student/examinationArrangement?semester=${term_id}" "${account}" "${password}"; then
+    return 1
+  fi
+  if ! sjd_parse_exams "${HTTP_BODY}" "${term_id}"; then
+    return 1
+  fi
+}

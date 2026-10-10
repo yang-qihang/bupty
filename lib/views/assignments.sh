@@ -28,6 +28,12 @@ _assignments_count() {
 
 # 拉取并缓存（不渲染）。成功 0，失败置 BUPTY_ERR 且保留旧数据。
 assignments_fetch() {
+  # 账号切换时先清空旧账号数据，避免跨账号残留泄漏。
+  if [[ "${ASSIGNMENTS_ACCOUNT}" != "${BUPTY_ACCOUNT}" ]]; then
+    ASSIGNMENTS_DATA=""
+    ASSIGNMENTS_SEL=0
+    ASSIGNMENTS_OFFSET=0
+  fi
   # 用临时文件承接 stdout，避免 $(...) 子 shell 丢失 BUPTY_ERR / 会话副作用。
   local tmp data
   tmp="$(mktemp)"

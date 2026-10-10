@@ -323,60 +323,114 @@ parse_minutes() {
   return 1
 }
 
+# 左起非重叠扫描正则匹配，每行输出 "start_char|length|match"（字符下标）。
+# 用字符下标（bash 在 UTF-8 环境按字符取子串），避免 grep -b 的字节偏移与多字节字符错位。
+_parse_re_scan() {
+  local text="$1" re="$2"
+  local idx=0 sub full after start
+  while :; do
+    [[ "${idx}" -ge "${#text}" ]] && break
+    sub="${text:idx}"
+    [[ "${sub}" =~ ${re} ]] || break
+    full="${BASH_REMATCH[0]}"
+    # ${sub#*"${full}"} 去掉到首个 full 的最短前缀，得到余下部分，从而反推首匹配下标。
+    after="${sub#*"${full}"}"
+    start=$(( ${#sub} - ${#after} - ${#full} ))
+    printf '%s|%s|%s\n' "$((idx + start))" "${#full}" "${full}"
+    idx=$(( idx + start + ${#full} ))
+  done
+}
+
 # 严格解析考试时间文本为 "date|start|end"（缺省为空串）。
 # 支持 "2026-09-07 09:20-11:00"、"2026年9月7日 9:20～11:00" 等；"另行通知"→date/start/end 全空。
-# TODO(Round 4): 完善 ":00" 秒级格式与相邻数字边界校验，并与参考仓库 parse_exam_time 测试逐条对齐。
 parse_exam_time() {
   local value="${1:-}"
   local norm="${value//：/:}"
 
-  # 提取所有日期候选
-  local -a dates=()
-  local d
-  while IFS= read -r d; do dates+=("${d}"); done < <(printf '%s' "${norm}" | grep -oE '[12][0-9]{3}[-/年.][0-9]{1,2}[-/月.][0-9]{1,2}日?')
-  if [[ ${#dates[@]} -ne 1 ]]; then
-    printf '||'
-    return 0
+  local DATE_RE='([12][0-9]{3})[-/年.]([0-9]{1,2})[-/月.]([0-9]{1,2})(日)?'
+  local CLOCK_RE='([0-9]{1,2}):([0-9]{2})(:[0-9]{2})?'
+
+  # 日期：收集唯一日期，逐个校验「两侧紧邻数字」与「真实日期」。
+  local -A date_set=()
+  local start len full y m dd iso
+  while IFS='|' read -r start len full; do
+    [[ -z "${full}" ]] && continue
+    if (( start > 0 )) && [[ "${norm:start-1:1}" =~ ^[0-9]$ ]]; then
+      printf '||'; return 0
+    fi
+    if (( start + len < ${#norm} )) && [[ "${norm:start+len:1}" =~ ^[0-9]$ ]]; then
+      printf '||'; return 0
+    fi
+    [[ "${full}" =~ ^([12][0-9]{3})[-/年.]([0-9]{1,2})[-/月.]([0-9]{1,2})日?$ ]] || { printf '||'; return 0; }
+    y="${BASH_REMATCH[1]}"; m="${BASH_REMATCH[2]}"; dd="${BASH_REMATCH[3]}"
+    iso="$(printf '%04d-%02d-%02d' "$((10#$y))" "$((10#$m))" "$((10#$dd))")"
+    if (( 10#$y < 1900 || 10#$y > 2200 )); then
+      printf '||'; return 0
+    fi
+    if [[ "$(date -d "${iso}" +%Y-%m-%d 2>/dev/null)" != "${iso}" ]]; then
+      printf '||'; return 0
+    fi
+    date_set["${iso}"]=1
+  done < <(_parse_re_scan "${norm}" "${DATE_RE}")
+
+  if [[ ${#date_set[@]} -ne 1 ]]; then
+    printf '||'; return 0
   fi
-  # 归一日期为 YYYY-MM-DD 并校验真实日期
-  local y m dd
-  y="$(printf '%s' "${dates[0]}" | grep -oE '^[12][0-9]{3}')"
-  m="$(printf '%s' "${dates[0]}" | sed -E 's/^[0-9]{4}[^0-9]([0-9]{1,2}).*/\1/')"
-  dd="$(printf '%s' "${dates[0]}" | grep -oE '[0-9]{1,2}日?$' | tr -d '日')"
-  local date
-  date="$(printf '%04d-%02d-%02d' "$((10#$y))" "$((10#$m))" "$((10#$dd))" 2>/dev/null)"
-  # 回读校验（拒绝 2026-02-30 之类非法日期）
-  if ! date -d "${date}" +%Y-%m-%d >/dev/null 2>&1 || [[ "$(date -d "${date}" +%Y-%m-%d 2>/dev/null)" != "${date}" ]]; then
-    printf '||'
-    return 0
+  local the_date
+  the_date="${!date_set[@]}"
+
+  # 时刻：恰好 2 个；含 :SS 时 SS 必须为 00；两侧紧邻数字则非法。
+  local -a times=() t_start=() t_end=()
+  local hh mm ss norm_time
+  while IFS='|' read -r start len full; do
+    [[ -z "${full}" ]] && continue
+    if (( start > 0 )) && [[ "${norm:start-1:1}" =~ ^[0-9]$ ]]; then
+      printf '%s||' "${the_date}"; return 0
+    fi
+    if (( start + len < ${#norm} )) && [[ "${norm:start+len:1}" =~ ^[0-9]$ ]]; then
+      printf '%s||' "${the_date}"; return 0
+    fi
+    [[ "${full}" =~ ^([0-9]{1,2}):([0-9]{2})(:[0-9]{2})?$ ]] || { printf '%s||' "${the_date}"; return 0; }
+    hh="${BASH_REMATCH[1]}"; mm="${BASH_REMATCH[2]}"; ss="${BASH_REMATCH[3]}"
+    if [[ -n "${ss}" && "${ss}" != ":00" ]]; then
+      printf '%s||' "${the_date}"; return 0
+    fi
+    norm_time="$(printf '%02d:%s' "$((10#$hh))" "${mm}")"
+    times+=("${norm_time}")
+    t_start+=("${start}")
+    t_end+=("$((start + len))")
+  done < <(_parse_re_scan "${norm}" "${CLOCK_RE}")
+
+  if [[ ${#times[@]} -ne 2 ]]; then
+    printf '%s||' "${the_date}"; return 0
   fi
 
-  # 提取时刻候选（HH:MM，可带 :SS 但 SS 必须为 00）
-  local -a clocks=()
-  local c
-  while IFS= read -r c; do
-    if [[ "${c}" =~ :[0-9]{2}$ && ! "${c}" =~ ^[0-9]{1,2}:[0-9]{2}$ ]]; then
-      # 含秒，忽略
-      continue
-    fi
-    clocks+=("${c}")
-  done < <(printf '%s' "${norm}" | grep -oE '[0-9]{1,2}:[0-9]{2}(:[0-9]{2})?')
-  if [[ ${#clocks[@]} -ne 2 ]]; then
-    printf '%s||' "${date}"
-    return 0
+  # 分隔符：两时刻之间去掉日期后，必须非空且仅含空白与 - – — ~ ～ 至 到。
+  local sep d2
+  sep="${norm:${t_end[0]}:$(( t_start[1] - t_end[0] ))}"
+  while IFS='|' read -r _ _ d2; do
+    [[ -z "${d2}" ]] && continue
+    sep="${sep//"${d2}"/}"
+  done < <(_parse_re_scan "${sep}" "${DATE_RE}")
+  if [[ -z "$(core_trim "${sep}")" ]]; then
+    printf '%s||' "${the_date}"; return 0
   fi
-  local s="${clocks[0]}" e="${clocks[1]}"
-  # 校验时刻格式严格（无秒）且 start<end
-  if ! [[ "${s}" =~ ^[0-9]{1,2}:[0-9]{2}$ && "${e}" =~ ^[0-9]{1,2}:[0-9]{2}$ ]]; then
-    printf '%s||' "${date}"
-    return 0
-  fi
+  local ch i
+  for ((i = 0; i < ${#sep}; i++)); do
+    ch="${sep:i:1}"
+    if [[ "${ch}" == [[:space:]] ]]; then continue; fi
+    case "${ch}" in
+      -|–|—|~|～|至|到) continue ;;
+      *) printf '%s||' "${the_date}"; return 0 ;;
+    esac
+  done
+
+  # 范围：start < end 且 start < 24:00。
   local sm em
-  sm="$(parse_minutes "${s}" 2>/dev/null)" || { printf '%s||' "${date}"; return 0; }
-  em="$(parse_minutes "${e}" 2>/dev/null)" || { printf '%s||' "${date}"; return 0; }
+  sm="$(parse_minutes "${times[0]}" 2>/dev/null)" || { printf '%s||' "${the_date}"; return 0; }
+  em="$(parse_minutes "${times[1]}" 2>/dev/null)" || { printf '%s||' "${the_date}"; return 0; }
   if (( sm >= em || sm >= 1440 )); then
-    printf '%s||' "${date}"
-    return 0
+    printf '%s||' "${the_date}"; return 0
   fi
-  printf '%s|%s|%s' "${date}" "${s}" "${e}"
+  printf '%s|%s|%s' "${the_date}" "${times[0]}" "${times[1]}"
 }
