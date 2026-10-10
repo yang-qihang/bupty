@@ -158,7 +158,7 @@ tui_main() {
     tui_render
     key="$(ui_read_key)"
     case "${key}" in
-      q) tui_quit ;;
+      q|EOF) tui_quit ;;
       TAB) tui_next_tab ;;
       ESC|BACKSPACE) tui_back ;;
       *)

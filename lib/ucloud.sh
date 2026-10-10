@@ -131,15 +131,13 @@ ucloud_authenticate() {
   return 0
 }
 
-# 会话复用：有则直接输出 token，无则完整认证。输出 token 或返回非 0。
+# 会话复用：有则直接返回 0，无则完整认证。token 存会话全局，不向 stdout 输出（避免泄漏）。
 ucloud_ensure_token() {
   local account="$1" password="$2"
   if ucloud_session_owned_by "${account}"; then
-    printf '%s' "$(ucloud_session_get)"
     return 0
   fi
   if ucloud_authenticate "${account}" "${password}"; then
-    printf '%s' "$(ucloud_session_get)"
     return 0
   fi
   return 1

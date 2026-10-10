@@ -82,15 +82,14 @@ sjd_login() {
   return 0
 }
 
-# 确保有当前账号的有效令牌，返回令牌或空（失败置 BUPTY_ERR）。
+# 确保有当前账号的有效令牌（token 存会话全局，不向 stdout 输出，避免泄漏）。
+# 成功返回 0，失败置 BUPTY_ERR 返回 1。
 sjd_ensure_token() {
   local account="$1" password="$2"
   if sjd_session_owned_by "${account}"; then
-    printf '%s' "$(sjd_session_get)"
     return 0
   fi
   if sjd_login "${account}" "${password}"; then
-    printf '%s' "$(sjd_session_get)"
     return 0
   fi
   return 1
