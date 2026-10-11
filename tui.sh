@@ -151,12 +151,24 @@ tui_main() {
   ui_raw_mode
   ui_hide_cursor
   trap 'ui_restore_mode; ui_clear' EXIT
+  # 窗口尺寸变化时置位，主循环在下个超时点立即重绘（响应 resize）。
+  trap 'TUI_RESIZED=1' WINCH
 
   local key
+  ui_size
+  tui_render
   while [[ "${TUI_QUIT}" -eq 0 ]]; do
+    key="$(ui_read_key 0.3)"
+    if [[ "${key}" == "TIMEOUT" ]]; then
+      # 空闲超时：仅在窗口尺寸变化时重绘，避免无谓闪烁。
+      if [[ -n "${TUI_RESIZED:-}" ]]; then
+        TUI_RESIZED=""
+        ui_size
+        tui_render
+      fi
+      continue
+    fi
     ui_size
-    tui_render
-    key="$(ui_read_key)"
     case "${key}" in
       q|EOF) tui_quit ;;
       TAB) tui_next_tab ;;
@@ -168,6 +180,7 @@ tui_main() {
         fi
         ;;
     esac
+    tui_render
   done
 }
 

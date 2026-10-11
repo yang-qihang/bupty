@@ -384,17 +384,18 @@ ucloud_fetch_assignments() {
   done < "${tmp}"
   rm -f "${tmp}"
 
-  # 按 (id, deadline) 去重合并（课程作业优先保留课程名），再升序排序。
+  # 按 id 去重合并：同一作业会同时出现在课程列表与首页 undone 列表（id 相同但
+  # deadline 秒数可能略有差异），以 id 为准去重，优先保留课程列表记录（有课程名、
+  # deadline 更权威）的首个字段。
   printf '%s' "${out}" | jq -s -c '
-    group_by([.id, .deadline])
+    group_by([.id])
     | map(
-        (reduce .[] as $r ({};
+        (sort_by(.course_name == "") | .[0]) as $primary
+        | (reduce .[] as $r ($primary;
           if (($r.course_name // "") != "") and ((.course_name // "") == "") then .course_name = $r.course_name else . end
           | if (($r.course_id // "") != "") and ((.course_id // "") == "") then .course_id = $r.course_id else . end
           | if (($r.title // "") != "") and ((.title // "") == "") then .title = $r.title else . end
           | if (($r.status // "") != "") and ((.status // "") == "") then .status = $r.status else . end
-          | .id = $r.id
-          | .deadline = $r.deadline
           | if ($r.type != null) and (.type == null) then .type = $r.type else . end
         ))
         | .course_name = (.course_name // "")

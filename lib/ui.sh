@@ -207,9 +207,17 @@ ui_center() {
 
 # 读取一个键，返回命名键（UP/DOWN/LEFT/RIGHT/PGUP/PGDN/HOME/END/TAB/ENTER/BACKSPACE/ESC）
 # 或原始字符（如 "a"、"1"、"r"）。
+# 可选第一个参数为超时秒数（>0 时超时返回 "TIMEOUT"，便于主循环检查 resize）。
 ui_read_key() {
-  local k rest seq seq2
-  IFS= read -r -s -n1 k || { printf 'EOF'; return 0; }
+  local timeout="${1:-0}" k rest seq seq2 rc
+  if [[ "${timeout}" != "0" ]]; then
+    IFS= read -r -s -n1 -t "${timeout}" k
+    rc=$?
+    if (( rc > 128 )); then printf 'TIMEOUT'; return 0; fi
+    if (( rc != 0 )); then printf 'EOF'; return 0; fi
+  else
+    IFS= read -r -s -n1 k || { printf 'EOF'; return 0; }
+  fi
   case "${k}" in
     $'\e')
       IFS= read -r -s -n1 -t 0.02 rest 2>/dev/null || rest=""
