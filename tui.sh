@@ -75,23 +75,20 @@ tui_next_tab() {
 
 # 顶部标题栏。
 tui_render_header() {
-  local left=" ${BUPTY_NAME}"
-  local right=""
+  local title right right_w left_w pad i
+  title="$(ui_view_title "${TUI_VIEW}")"
   if creds_exists 2>/dev/null; then
     right="${BUPTY_ACCOUNT} · 已登录"
   else
     right="未登录"
   fi
-  local width="${UI_COLS}"
-  local right_w
+  # 左侧 = " bupty"(6 列) + " "(1 列) + 标题；右侧 = 账号状态。
+  left_w=$(( 6 + 1 + $(core_fit_width "${title}") ))
   right_w="$(core_fit_width "${right}")"
-  printf '%s' "$(ui_paint accent " ${BUPTY_NAME}")"
-  printf ' %s' "$(ui_paint title "$(ui_view_title "${TUI_VIEW}")")"
-  # 右侧账号状态
-  local pad
-  pad=$(( width - 2 - 4 - $(core_fit_width "$(ui_view_title "${TUI_VIEW}")") - right_w ))
+  pad=$(( UI_COLS - left_w - right_w ))
   (( pad < 0 )) && pad=0
-  local i
+  printf '%s' "$(ui_paint accent " ${BUPTY_NAME}")"
+  printf ' %s' "$(ui_paint title "${title}")"
   for ((i = 0; i < pad; i++)); do printf ' '; done
   printf '%s\n' "$(ui_paint muted "${right}")"
 }
@@ -150,7 +147,8 @@ tui_main() {
   creds_load || true
   ui_raw_mode
   ui_hide_cursor
-  trap 'ui_restore_mode; ui_clear' EXIT
+  ui_enter_alt_screen
+  trap 'ui_exit_alt_screen; ui_restore_mode' EXIT
   # 窗口尺寸变化时置位，主循环在下个超时点立即重绘（响应 resize）。
   trap 'TUI_RESIZED=1' WINCH
 

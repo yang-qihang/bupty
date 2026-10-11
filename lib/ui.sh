@@ -99,6 +99,10 @@ ui_erase_prev_line() {
 ui_hide_cursor() { printf '\033[?25l'; }
 ui_show_cursor() { printf '\033[?25h'; }
 
+# 备用屏幕缓冲区：TUI 帧不污染终端滚动历史，退出时还原原屏幕（同 vim/less）。
+ui_enter_alt_screen() { printf '\033[?1049h'; }
+ui_exit_alt_screen() { printf '\033[?1049l'; }
+
 # 进入 raw 模式（无回显、逐键）。
 ui_raw_mode() {
   _UI_SAVED_TTY="$(stty -g 2>/dev/null)" || _UI_SAVED_TTY=""
