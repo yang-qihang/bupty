@@ -324,10 +324,11 @@ _assignments_submit_flow() {
   # 选择提交方式（方向键高亮选择，与全 app 一致）。
   printf ' %s\n' "$(ui_paint muted '提交方式（↑↓ 选择 · Enter 确认 · Esc 取消）')"
   local method
-  if ! method="$(ui_select_option '1|指定文件夹' '2|指定单个文件')"; then
+  if ! ui_select_option '1|指定文件夹' '2|指定单个文件'; then
     core_err "已取消提交。"
     return 1
   fi
+  method="${UI_SELECT_RESULT}"
 
   # 选择路径。
   local path=""

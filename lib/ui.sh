@@ -336,17 +336,20 @@ ui_input() {
 # ---------------------------------------------------------------------------
 
 # ui_select_option "值1|显示1" "值2|显示2" ...（无 "|" 时值=显示）
-# ↑↓ 移动焦点、Enter 确认并输出选中值、Esc/q 返回非 0。
-# 渲染在当前光标位置，每次重画前上移清掉上一帧选项区。
+# ↑↓ 移动焦点、Enter 确认（选中值写入 UI_SELECT_RESULT）、Esc/q 返回非 0。
+# 渲染直接写 stdout（当前光标位置），每次重画前上移清掉上一帧选项区。
+UI_SELECT_RESULT=""
 ui_select_option() {
   local -a opts=("$@")
   local sel=0 key i n="${#opts[@]}" value label
+  UI_SELECT_RESULT=""
   [[ "${n}" -eq 0 ]] && return 1
   while :; do
     for ((i = 0; i < n; i++)); do
       label="${opts[$i]#*|}"
       if (( i == sel )); then
-        printf '\r\033[K %s\n' "$(ui_paint hl "› ${label}")"
+        # 选中项：整行背景高亮（与全 app 列表选中一致）。
+        printf '\r\033[K %s%s%s\n' "${UI_HL}" "$(core_fit "› ${label}" "$((UI_COLS - 4))")" "${UI_RESET}"
       else
         printf '\r\033[K   %s\n' "$(ui_paint text "${label}")"
       fi
@@ -358,7 +361,7 @@ ui_select_option() {
       ENTER)
         value="${opts[$sel]}"
         [[ "${value}" == *\|* ]] && value="${value%%|*}"
-        printf '%s' "${value}"
+        UI_SELECT_RESULT="${value}"
         return 0
         ;;
       ESC|q) return 1 ;;
