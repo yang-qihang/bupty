@@ -406,3 +406,108 @@ ucloud_fetch_assignments() {
     | sort_by(.deadline, .course_name, .title, .id)
   '
 }
+
+# ---------------------------------------------------------------------------
+# 作业提交（协议见 docs/ucloud-submit.md）
+# ---------------------------------------------------------------------------
+
+# 附件上传超时（秒）：大文件上传耗时远高于普通请求。
+BUPTY_UPLOAD_TIMEOUT="${BUPTY_UPLOAD_TIMEOUT:-600}"
+
+# 拉取作业详情，输出响应的 data 对象 JSON（含 assignmentType/subGroupId/
+# isOvertimeCommit/assignmentStatus/status）。失败置 BUPTY_ERR 返回 1。
+ucloud_fetch_work_detail() {
+  local assignment_id="$1"
+  if ! _ucloud_api_authed "GET" "/ykt-site/work/detail" "assignmentId=${assignment_id}" ""; then
+    return 1
+  fi
+  local data
+  data="$(printf '%s' "${HTTP_BODY:-}" | jq -c '.data // {}' 2>/dev/null || true)"
+  [[ -z "${data}" ]] && data="{}"
+  printf '%s' "${data}"
+}
+
+# 上传单个附件（multipart：file/userId/bizType=3），成功输出 resourceId 字符串。
+# 失败置 BUPTY_ERR 返回 1。multipart 必须用 curl -F，不能用 http_post_form。
+# 失效时自动重登重试一次（与 _ucloud_api_authed 一致）。
+ucloud_upload_attachment() {
+  local file_path="$1"
+  local url="${UCLOUD_API}/blade-source/resource/upload/biz"
+  local filename
+  filename="$(basename "${file_path}")"
+  # 文件名里的 ; , " 会破坏 curl -F 的解析，替换掉（仅影响服务端显示名）。
+  filename="${filename//;/_}"; filename="${filename//,/_}"; filename="${filename//\"/_}"; filename="${filename//\\/_}"
+
+  local attempt token rid
+  for attempt in 1 2; do
+    token="$(ucloud_session_get)"
+    # || true 防 set -e 在连接失败（HTTP_STATUS=000）时中断流程，随后显式检查状态。
+    # 用 file=@- 从 stdin 读取文件内容，避免路径中含 ; , 时被 curl 拆错。
+    http_request --max-time "${BUPTY_UPLOAD_TIMEOUT}" \
+      -H "User-Agent: ${BUPTY_USER_AGENT}" \
+      -H "Accept: application/json, text/plain, */*" \
+      -H "Authorization: ${UCLOUD_BASIC_AUTH}" \
+      -H "Tenant-Id: 000000" \
+      -H "Referer: ${UCLOUD_ORIGIN}/" \
+      ${token:+-H "Blade-Auth: ${token}"} \
+      -F "file=@-;filename=${filename}" \
+      -F "userId=${BUPTY_UCLOUD_USER_ID}" \
+      -F "bizType=3" \
+      "${url}" < "${file_path}" || true
+
+    if [[ "${HTTP_STATUS}" == "000" ]]; then
+      core_err "无法连接教学云服务，请确认网络能访问 apiucloud.bupt.edu.cn。"
+      return 1
+    fi
+    if _ucloud_is_expired; then
+      ucloud_session_clear
+      if (( attempt < 2 )); then
+        if ! ucloud_authenticate "${BUPTY_ACCOUNT}" "$(creds_assignment_password)"; then
+          return 1
+        fi
+        continue
+      fi
+      core_err "教学云登录已失效，请重新登录。"
+      return 1
+    fi
+    if [[ "${HTTP_STATUS}" != "2"* ]]; then
+      core_err "$(_ucloud_error_message)"
+      return 1
+    fi
+    if ! _ucloud_code_success; then
+      core_err "$(_ucloud_error_message)"
+      return 1
+    fi
+    rid="$(printf '%s' "${HTTP_BODY:-}" | jq -r '.data // empty' 2>/dev/null || true)"
+    if core_is_blank "${rid}"; then
+      core_err "附件上传失败：服务未返回资源标识。"
+      return 1
+    fi
+    printf '%s' "${rid}"
+    return 0
+  done
+  core_err "附件上传失败。"
+  return 1
+}
+
+# 提交作业。成功（HTTP 2xx 且 body.code==200）返回 0，否则置 BUPTY_ERR 返回 1。
+ucloud_submit_assignment() {
+  local assignment_id="$1" content="$2" attachment_ids_json="$3" assignment_type="$4" group_id="$5"
+  local body
+  body="$(jq -n \
+    --arg aid "${assignment_id}" \
+    --arg content "${content}" \
+    --argjson att "${attachment_ids_json}" \
+    --arg atype "${assignment_type}" \
+    --arg uid "${BUPTY_UCLOUD_USER_ID}" \
+    --arg gid "${group_id}" \
+    '{attachmentIds: $att, assignmentContent: $content, assignmentId: $aid,
+      assignmentType: ($atype | tonumber? // 0), userId: $uid, groupId: $gid, commitId: ""}')" || {
+    core_err "提交数据构造失败。"
+    return 1
+  }
+  if ! _ucloud_api_authed "POST" "/ykt-site/work/submit" "" "${body}"; then
+    return 1
+  fi
+  return 0
+}

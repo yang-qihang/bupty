@@ -151,7 +151,7 @@ _assignments_render_list() {
   local total
   total="$(_assignments_count)"
   printf '\n'
-  printf ' %s\n' "$(ui_paint muted "账号 ${BUPTY_ACCOUNT} · 共 ${total} 项作业 · ↑↓ 选择 · r 刷新")"
+  printf ' %s\n' "$(ui_paint muted "账号 ${BUPTY_ACCOUNT} · 共 ${total} 项作业 · ↑↓ 选择 · s/Enter 提交 · r 刷新")"
 
   if [[ -z "${ASSIGNMENTS_DATA}" ]]; then
     if [[ -n "${BUPTY_ERR}" ]]; then
@@ -241,6 +241,89 @@ apply_assignments() {
   return 0
 }
 
+# 当前选中作业（JSON 对象）。无数据/越界返回 1。
+_assignments_selected() {
+  if [[ -z "${ASSIGNMENTS_DATA}" ]]; then
+    return 1
+  fi
+  local obj
+  obj="$(printf '%s' "${ASSIGNMENTS_DATA}" | jq -c --argjson i "${ASSIGNMENTS_SEL}" '.[$i] // empty' 2>/dev/null || true)"
+  if [[ -z "${obj}" ]]; then
+    return 1
+  fi
+  printf '%s' "${obj}"
+}
+
+# 提交成功后本地把当前作业标记为已提交（列表即时反馈）。
+_assignments_mark_submitted() {
+  if [[ -z "${ASSIGNMENTS_DATA}" ]]; then
+    return 0
+  fi
+  ASSIGNMENTS_DATA="$(printf '%s' "${ASSIGNMENTS_DATA}" | jq -c --argjson i "${ASSIGNMENTS_SEL}" \
+    'if (.[$i] // null) != null then .[$i].status = "已提交" else . end' 2>/dev/null || true)"
+  _assignments_precompute
+}
+
+# 提交流程：同步、逐步交互，Esc 任一步可安全取消。
+_assignments_submit_flow() {
+  local obj id title course deadline status
+  if ! obj="$(_assignments_selected)"; then
+    core_err "暂无作业可提交。"
+    return 1
+  fi
+  id="$(printf '%s' "${obj}" | jq -r '.id // empty' 2>/dev/null || true)"
+  title="$(printf '%s' "${obj}" | jq -r '.title // "未命名作业"' 2>/dev/null || true)"
+  course="$(printf '%s' "${obj}" | jq -r '.course_name // ""' 2>/dev/null || true)"
+  deadline="$(printf '%s' "${obj}" | jq -r '.deadline // ""' 2>/dev/null || true)"
+  status="$(printf '%s' "${obj}" | jq -r '.status // ""' 2>/dev/null || true)"
+  if core_is_blank "${id}"; then
+    core_err "作业信息不完整，无法提交。"
+    return 1
+  fi
+
+  # 说明：附件约束 / homework_content.txt 语义 / 两种方式区别。
+  if ! ui_input "作业提交说明：附件支持 mp3/m4a≤100MB、mp4≤200MB、jpg/gif/png/jpeg≤20MB、txt/doc/docx/pdf/xls/xlsx≤100MB、ppt/pptx≤300MB、rar/zip≤3GB，最多 10 个。方式1=指定文件夹（目录内 homework_content.txt 作为作业内容文字，其余合规文件作为附件）；方式2=指定单个文件（仅作附件，无内容文字）。回车开始，Esc 取消。" "" 0 0; then
+    core_err "已取消提交。"
+    return 1
+  fi
+
+  # 作业信息 + 选择提交方式。
+  local info=""
+  info="【${course}】${title}"
+  [[ -n "${deadline}" ]] && info+="（截止 ${deadline}）"
+  [[ -n "${status}" ]] && info+="（${status}）"
+  if ! ui_input "${info} 提交方式：1=指定文件夹，2=指定单个文件（Esc 取消）" "" 0 1; then
+    core_err "已取消提交。"
+    return 1
+  fi
+  local method="${UI_INPUT_RESULT}"
+  if [[ "${method}" != "1" && "${method}" != "2" ]]; then
+    core_err "已取消提交。"
+    return 1
+  fi
+
+  # 选择路径。
+  local path=""
+  if [[ "${method}" == "1" ]]; then
+    path="$(ui_select_directory "选择作业文件夹")"
+  else
+    path="$(ui_select_file "选择作业文件")"
+  fi
+  if core_is_blank "${path}"; then
+    core_err "已取消提交。"
+    return 1
+  fi
+
+  # 编排（认证/校验/确认/上传/提交在 lib/submit.sh）。
+  if submit_do "${id}" "${method}" "${path}"; then
+    tui_set_status "提交成功：${SUBMIT_MSG}"
+    _assignments_mark_submitted
+    return 0
+  fi
+  core_err "${BUPTY_ERR:-提交失败。}"
+  return 1
+}
+
 # 按键处理：↑/↓ 移动、PgUp/PgDn 翻页、r 刷新。
 handle_assignments_key() {
   local key="$1"
@@ -265,6 +348,9 @@ handle_assignments_key() {
       ;;
     r)
       assignments_refresh
+      ;;
+    s|ENTER)
+      _assignments_submit_flow || true
       ;;
   esac
 }
