@@ -12,6 +12,26 @@ _BUPTY_BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUPTY_HOME="$(cd "${_BUPTY_BIN_DIR}/.." && pwd)"
 export BUPTY_HOME
 
+# 后台模式：不进入 TUI，循环拉取作业并对「紧急 DDL」弹窗通知。
+if [[ "${1:-}" == "--background" ]]; then
+  # shellcheck disable=SC1090
+  source "${BUPTY_HOME}/lib/core.sh"
+  # shellcheck disable=SC1090
+  source "${BUPTY_HOME}/lib/http.sh"
+  # shellcheck disable=SC1090
+  source "${BUPTY_HOME}/lib/session.sh"
+  # shellcheck disable=SC1090
+  source "${BUPTY_HOME}/lib/creds.sh"
+  # shellcheck disable=SC1090
+  source "${BUPTY_HOME}/lib/ucloud.sh"
+  # shellcheck disable=SC1090
+  source "${BUPTY_HOME}/lib/settings.sh"
+  # shellcheck disable=SC1090
+  source "${BUPTY_HOME}/lib/background.sh"
+  background_run
+  exit $?
+fi
+
 # shellcheck disable=SC1090
 source "${BUPTY_HOME}/tui.sh"
 

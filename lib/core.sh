@@ -39,6 +39,8 @@ BUPTY_CACHE_DIR="${BUPTY_CONFIG_DIR}/cache"
 BUPTY_CREDENTIALS_FILE="${BUPTY_CONFIG_DIR}/credentials.json"
 BUPTY_SETTINGS_FILE="${BUPTY_CONFIG_DIR}/settings.json"
 BUPTY_FAVORITES_FILE="${BUPTY_CONFIG_DIR}/favorite-events.json"
+# 后台通知去重状态：已通知作业 id -> 截止日期（YYYY-MM-DD）。
+BUPTY_NOTIFIED_FILE="${BUPTY_CONFIG_DIR}/notified.json"
 
 # 确保配置目录存在（凭据目录 0700）。
 core_ensure_dirs() {

@@ -10,6 +10,9 @@ SETTINGS_ITEMS=(
   "account|账号"
   "password|教务密码"
   "teaching|教学云密码（可选）"
+  "autostart|开机自启动"
+  "notify|紧急 DDL 通知"
+  "interval|通知检查频率"
   "login|登录"
   "logout|登出"
 )
@@ -34,6 +37,33 @@ _settings_field_value() {
     account) printf '%s' "${SETTINGS_ACCOUNT}" ;;
     password) if [[ -n "${SETTINGS_PASSWORD}" ]]; then printf '已填写（隐藏）'; else printf '（未设置）'; fi ;;
     teaching) if [[ -n "${SETTINGS_TEACHING}" ]]; then printf '已填写（隐藏）'; else printf '（未设置，默认用教务密码）'; fi ;;
+    autostart) if [[ "$(settings_get autostart_enabled)" == "true" ]]; then printf '开'; else printf '关'; fi ;;
+    notify)
+      if [[ "$(settings_get autostart_enabled)" != "true" ]]; then
+        printf '（需先开启自启动）'
+      elif [[ "$(settings_get notify_enabled)" == "true" ]]; then
+        printf '开'
+      else
+        printf '关'
+      fi
+      ;;
+    interval)
+      if [[ "$(settings_get autostart_enabled)" != "true" ]]; then
+        printf '（需先开启自启动）'
+      else
+        _settings_interval_label
+      fi
+      ;;
+  esac
+}
+
+# 通知检查频率文案。
+_settings_interval_label() {
+  case "$(settings_get notify_interval)" in
+    30) printf '30分钟' ;;
+    60) printf '1小时' ;;
+    180) printf '3小时' ;;
+    *) printf '1小时' ;;
   esac
 }
 
@@ -81,6 +111,40 @@ handle_settings_key() {
         teaching)
           ui_input "教学云密码（留空=用教务密码）： " "${SETTINGS_TEACHING}" 1 128 || return 0
           SETTINGS_TEACHING="${UI_INPUT_RESULT}"
+          ;;
+        autostart)
+          if [[ "$(settings_get autostart_enabled)" == "true" ]]; then
+            autostart_disable
+            tui_set_status "已关闭开机自启动。"
+          elif autostart_enable; then
+            tui_set_status "已开启开机自启动。"
+          else
+            tui_set_status "${BUPTY_ERR:-开机自启动开启失败。}"
+          fi
+          ;;
+        notify)
+          if [[ "$(settings_get autostart_enabled)" != "true" ]]; then
+            tui_set_status "需先开启自启动。"
+          elif [[ "$(settings_get notify_enabled)" == "true" ]]; then
+            settings_set notify_enabled false
+            tui_set_status "已关闭紧急 DDL 通知。"
+          else
+            settings_set notify_enabled true
+            tui_set_status "已开启紧急 DDL 通知。"
+          fi
+          ;;
+        interval)
+          if [[ "$(settings_get autostart_enabled)" != "true" ]]; then
+            tui_set_status "需先开启自启动。"
+          else
+            case "$(settings_get notify_interval)" in
+              30) settings_set notify_interval 60 ;;
+              60) settings_set notify_interval 180 ;;
+              180) settings_set notify_interval 30 ;;
+              *) settings_set notify_interval 60 ;;
+            esac
+            tui_set_status "通知检查频率已更新。"
+          fi
           ;;
         login)
           settings_login
