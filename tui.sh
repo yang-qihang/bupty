@@ -70,6 +70,61 @@ tui_next_tab() {
 }
 
 # ---------------------------------------------------------------------------
+# 后台拉取（异步加载：切页即时显示，数据后台拉取完成后重绘）
+# ---------------------------------------------------------------------------
+
+TUI_FETCH_PID=""
+TUI_FETCH_VIEW=""
+TUI_FETCH_FILE=""
+
+# 启动后台拉取：_async_start <view> <fetch-func> [args...]
+# fetch-func 成功时输出数据到 stdout；失败时输出 "ERROR:消息"。
+_async_start() {
+  local view="$1" func="$2"
+  shift 2
+  _async_stop
+  TUI_FETCH_VIEW="$view"
+  TUI_FETCH_FILE="$(mktemp)"
+  (
+    if "${func}" "$@"; then
+      exit 0
+    else
+      printf 'ERROR:%s' "${BUPTY_ERR:-加载失败}"
+    fi
+  ) > "${TUI_FETCH_FILE}" 2>/dev/null &
+  TUI_FETCH_PID=$!
+}
+
+# 终止当前后台拉取并清理。
+_async_stop() {
+  if [[ -n "${TUI_FETCH_PID}" ]]; then
+    kill "${TUI_FETCH_PID}" 2>/dev/null || true
+    wait "${TUI_FETCH_PID}" 2>/dev/null || true
+  fi
+  [[ -n "${TUI_FETCH_FILE}" ]] && rm -f "${TUI_FETCH_FILE}"
+  TUI_FETCH_PID=""
+  TUI_FETCH_VIEW=""
+  TUI_FETCH_FILE=""
+}
+
+# 轮询后台拉取：完成则调用视图 apply 回调并返回 0（需重绘），否则返回 1。
+_async_poll() {
+  [[ -z "${TUI_FETCH_PID}" ]] && return 1
+  if kill -0 "${TUI_FETCH_PID}" 2>/dev/null; then
+    return 1
+  fi
+  local view="${TUI_FETCH_VIEW}" file="${TUI_FETCH_FILE}"
+  TUI_FETCH_PID=""
+  TUI_FETCH_VIEW=""
+  TUI_FETCH_FILE=""
+  if declare -F "apply_${view}" >/dev/null 2>&1; then
+    "apply_${view}" "${file}"
+  fi
+  rm -f "${file}"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
 # 渲染框架
 # ---------------------------------------------------------------------------
 
@@ -155,7 +210,7 @@ tui_main() {
   ui_hide_cursor
   ui_enter_alt_screen
   TUI_FRAME_FILE="$(mktemp)"
-  trap 'rm -f "${TUI_FRAME_FILE}"; ui_exit_alt_screen; ui_restore_mode' EXIT
+  trap '_async_stop; rm -f "${TUI_FRAME_FILE}"; ui_exit_alt_screen; ui_restore_mode' EXIT
   # 窗口尺寸变化时置位，主循环在下个超时点立即重绘（响应 resize）。
   trap 'TUI_RESIZED=1' WINCH
 
@@ -165,8 +220,11 @@ tui_main() {
   while [[ "${TUI_QUIT}" -eq 0 ]]; do
     key="$(ui_read_key 0.3)"
     if [[ "${key}" == "TIMEOUT" ]]; then
-      # 空闲超时：仅在窗口尺寸变化时重绘，避免无谓闪烁。
-      if [[ -n "${TUI_RESIZED:-}" ]]; then
+      # 空闲超时：后台拉取完成则重绘；窗口尺寸变化也重绘。
+      if _async_poll; then
+        ui_size
+        tui_render
+      elif [[ -n "${TUI_RESIZED:-}" ]]; then
         TUI_RESIZED=""
         ui_size
         tui_render
@@ -175,6 +233,7 @@ tui_main() {
     fi
     ui_size
     case "${key}" in
+      IGNORE) continue ;;   # 鼠标等被忽略的输入，不重绘。
       q|EOF) tui_quit ;;
       TAB) tui_next_tab ;;
       ESC|BACKSPACE) tui_back ;;

@@ -199,9 +199,45 @@ render_assignments() {
     return 0
   fi
   if _assignments_stale; then
-    assignments_fetch
+    if [[ -z "${TUI_FETCH_PID}" ]]; then
+      # 账号切换时先清空旧数据，再后台拉取。
+      if [[ "${ASSIGNMENTS_ACCOUNT}" != "${BUPTY_ACCOUNT}" ]]; then
+        ASSIGNMENTS_DATA=""; ASSIGNMENTS_ROWS=""; ASSIGNMENTS_COLORS=""; ASSIGNMENTS_COUNT=0
+        ASSIGNMENTS_SEL=0; ASSIGNMENTS_OFFSET=0
+      fi
+      _async_start assignments ucloud_fetch_assignments
+    fi
   fi
-  _assignments_render_list
+  if [[ -z "${ASSIGNMENTS_DATA}" ]]; then
+    printf '\n %s\n' "$(ui_paint muted '  正在加载作业…')"
+  else
+    _assignments_render_list
+  fi
+}
+
+# 后台拉取完成回调：读取数据并更新视图状态。
+apply_assignments() {
+  local file="$1" data
+  data="$(cat "${file}" 2>/dev/null || true)"
+  if [[ "${data}" == ERROR:* ]]; then
+    core_err "${data#ERROR:}"
+    ASSIGNMENTS_LOADED=1
+    ASSIGNMENTS_ACCOUNT="${BUPTY_ACCOUNT}"
+    return 0
+  fi
+  if [[ -n "${data}" ]]; then
+    ASSIGNMENTS_DATA="${data}"
+    ASSIGNMENTS_ACCOUNT="${BUPTY_ACCOUNT}"
+    ASSIGNMENTS_LOADED=1
+    ASSIGNMENTS_SEL=0
+    ASSIGNMENTS_OFFSET=0
+    _assignments_precompute
+  else
+    core_err "加载失败。"
+    ASSIGNMENTS_LOADED=1
+    ASSIGNMENTS_ACCOUNT="${BUPTY_ACCOUNT}"
+  fi
+  return 0
 }
 
 # 按键处理：↑/↓ 移动、PgUp/PgDn 翻页、r 刷新。

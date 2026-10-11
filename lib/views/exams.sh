@@ -174,15 +174,67 @@ _exams_render_content() {
 }
 
 # 进入视图渲染。首次进入同步拉取（短暂阻塞），随后渲染列表或错误。
+# 组合网络函数：当前学期 + 考试安排，输出考试 JSON。
+exams_fetch_data() {
+  local terms term_id report
+  if ! terms="$(sjd_fetch_grade_terms "${BUPTY_ACCOUNT}" "${BUPTY_PASSWORD}")"; then
+    return 1
+  fi
+  term_id="$(printf '%s' "${terms}" | jq -r '.current_term_id // empty' 2>/dev/null || true)"
+  if [[ -z "${term_id}" ]]; then
+    core_err "教务未返回当前学期。"
+    return 1
+  fi
+  if ! report="$(sjd_fetch_exams "${BUPTY_ACCOUNT}" "${BUPTY_PASSWORD}" "${term_id}")"; then
+    return 1
+  fi
+  printf '%s' "${report}"
+}
+
 render_exams() {
   if ! creds_load; then
     printf '\n %s\n' "$(ui_paint muted '  请先在设置中登录。')"
     return 0
   fi
   if _exams_stale; then
-    exams_fetch
+    if [[ -z "${TUI_FETCH_PID}" ]]; then
+      if [[ "${EXAMS_ACCOUNT}" != "${BUPTY_ACCOUNT}" ]]; then
+        EXAMS_DATA=""; EXAMS_ROWS=""; EXAMS_COUNT=0
+        EXAMS_SEL=0; EXAMS_OFFSET=0
+      fi
+      _async_start exams exams_fetch_data
+    fi
   fi
-  _exams_render_content
+  if [[ -z "${EXAMS_DATA}" ]]; then
+    printf '\n %s\n' "$(ui_paint muted '  正在加载考试安排…')"
+  else
+    _exams_render_content
+  fi
+}
+
+# 后台拉取完成回调：读取数据并更新视图状态。
+apply_exams() {
+  local file="$1" data
+  data="$(cat "${file}" 2>/dev/null || true)"
+  if [[ "${data}" == ERROR:* ]]; then
+    core_err "${data#ERROR:}"
+    EXAMS_LOADED=1
+    EXAMS_ACCOUNT="${BUPTY_ACCOUNT}"
+    return 0
+  fi
+  if [[ -n "${data}" ]]; then
+    EXAMS_DATA="${data}"
+    EXAMS_ACCOUNT="${BUPTY_ACCOUNT}"
+    EXAMS_LOADED=1
+    EXAMS_SEL=0
+    EXAMS_OFFSET=0
+    _exams_precompute
+  else
+    core_err "加载失败。"
+    EXAMS_LOADED=1
+    EXAMS_ACCOUNT="${BUPTY_ACCOUNT}"
+  fi
+  return 0
 }
 
 # 按键处理：↑/↓ 移动、PgUp/PgDn 翻页、r 刷新。

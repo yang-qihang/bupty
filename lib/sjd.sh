@@ -436,67 +436,66 @@ sjd_fetch_schedule() {
 # 解析单个校区的空教室 payload，输出房间 JSON 数组（按 building/room 升序）。
 _sjd_parse_classrooms_payload() {
   local payload="$1"
+
+  # 1. 收集所有唯一房间字符串（一次 jq + sort -u），避免逐节次重复解析同一房间。
+  # 字段大小写不统一（CLASSROOMS/classrooms/Classrooms），统一转大写键后取值。
+  local all_rooms
+  all_rooms="$(printf '%s' "${payload}" | jq -r '[.data[]? | to_entries | map({key:(.key|ascii_upcase), value:.value}) | from_entries | .CLASSROOMS // empty] | join(",")' 2>/dev/null \
+    | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$' | sort -u)"
+
+  # 2. 解析每个唯一房间（一次），构建 "原始串 → building\x1froom\x1fsize" 映射。
+  local -A room_map=()
+  local r parsed b room sz building side rn
+  while IFS= read -r r; do
+    [[ -z "${r}" ]] && continue
+    parsed="$(parse_classroom "${r}")"
+    [[ -z "${parsed}" ]] && continue
+    IFS='|' read -r b room sz <<< "${parsed}"
+    building="$(parse_building_name "${b}")"
+    side="$(parse_teaching_experiment_side "${building}" "${room}")"
+    building="${side%%|*}"; room="${side#*|}"
+    [[ "$(parse_original_building "${building}")" != "0" ]] && continue
+    rn="$(parse_extract_room_name "${room}" "${building}")"
+    [[ -z "${rn}" ]] && continue
+    room_map["${r}"]="${building}"$'\x1f'"${rn}"$'\x1f'"${sz:-}"
+  done <<< "${all_rooms}"
+
+  # 3. 逐节次遍历，内联 trim 后查映射，写 TSV（building\x1froom\x1fsize\x1fslot）。
   local tmp
   tmp="$(mktemp)"
   local line nodename classrooms slot
   while IFS= read -r line; do
     [[ -z "${line}" ]] && continue
-    # 学校接口字段大小写不统一（NODENAME/nodeName/nodename、CLASSROOMS/classrooms/Classrooms），
-    # 统一转大写键后取值。
     nodename="$(printf '%s' "${line}" | jq -r 'to_entries | map({key:(.key|ascii_upcase), value:.value}) | from_entries | .NODENAME // empty' 2>/dev/null || true)"
     classrooms="$(printf '%s' "${line}" | jq -r 'to_entries | map({key:(.key|ascii_upcase), value:.value}) | from_entries | .CLASSROOMS // empty' 2>/dev/null || true)"
     slot="$(parse_node_to_slot "${nodename}")"
     [[ -z "${slot}" ]] && continue
-
-    local room_raw parsed building_raw room_size
     local -a room_list=()
     local IFS=,
     read -ra room_list <<< "${classrooms}"
+    local room_raw key
     for room_raw in "${room_list[@]}"; do
-      room_raw="$(core_trim "${room_raw}")"
+      room_raw="${room_raw#"${room_raw%%[![:space:]]*}"}"
+      room_raw="${room_raw%"${room_raw##*[![:space:]]}"}"
       [[ -z "${room_raw}" ]] && continue
-      parsed="$(parse_classroom "${room_raw}")"
-      [[ -z "${parsed}" ]] && continue
-      IFS='|' read -r building_raw room_raw room_size <<< "${parsed}"
-
-      local building
-      building="$(parse_building_name "${building_raw}")"
-      local side_out
-      side_out="$(parse_teaching_experiment_side "${building}" "${room_raw}")"
-      building="${side_out%%|*}"
-      room_raw="${side_out#*|}"
-      if [[ "$(parse_original_building "${building}")" != "0" ]]; then
-        continue
-      fi
-
-      local room size_json
-      room="$(parse_extract_room_name "${room_raw}" "${building}")"
-      [[ -z "${room}" ]] && continue
-      if [[ -n "${room_size}" ]]; then
-        size_json="${room_size}"
-      else
-        size_json="null"
-      fi
-      jq -n --arg building "${building}" --arg room "${room}" --argjson size "${size_json}" --argjson slot "${slot}" \
-        '{building:$building, room:$room, size:$size, slot:$slot}' >> "${tmp}" 2>/dev/null || true
+      key="${room_map[${room_raw}]:-}"
+      [[ -z "${key}" ]] && continue
+      printf '%s\x1f%s\n' "${key}" "${slot}" >> "${tmp}"
     done
   done < <(printf '%s' "${payload}" | jq -c '.data[]?' 2>/dev/null || true)
 
+  # 4. 单次 jq 聚合、去重、排序。
   local out
-  out="$(jq -s '
-    reduce .[] as $r ({};
-      .[$r.building + "-" + $r.room] |= (
-        if . == null then
-          {building: $r.building, room: $r.room, size: $r.size, slots: [$r.slot]}
-        else
-          {building: $r.building, room: $r.room,
-           size: (if .size != null then .size else $r.size end),
-           slots: (.slots + [$r.slot])}
-        end
-      )
-    )
-    | to_entries | map(.value)
-    | map({building, room, size, available_slots: (.slots | unique | sort)})
+  out="$(jq -R -s -c '
+    split("\n") | map(select(. != ""))
+    | map(split("\u001f"))
+    | map({building: .[0], room: .[1],
+           size: (if .[2] == "" then null else (.[2] | tonumber) end),
+           slot: (.[3] | tonumber)})
+    | group_by([.building, .room])
+    | map({building: .[0].building, room: .[0].room,
+           size: ([.[].size] | map(select(. != null)) | .[0] // null),
+           available_slots: ([.[].slot] | unique | sort)})
     | sort_by(.building, .room)
   ' "${tmp}" 2>/dev/null || true)"
   rm -f "${tmp}"

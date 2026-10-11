@@ -277,9 +277,47 @@ render_classrooms() {
     return 0
   fi
   if _classrooms_stale; then
-    classrooms_fetch
+    if [[ -z "${TUI_FETCH_PID}" ]]; then
+      if [[ "${CLASSROOMS_ACCOUNT}" != "${BUPTY_ACCOUNT}" ]]; then
+        CLASSROOMS_DATA=""; CLASSROOMS_CAMPUS0_ROWS=""; CLASSROOMS_CAMPUS1_ROWS=""
+        CLASSROOMS_CAMPUS0_BUILDINGS=""; CLASSROOMS_CAMPUS1_BUILDINGS=""
+        CLASSROOMS_CAMPUS=0; CLASSROOMS_BUILDING=""; CLASSROOMS_SEL=0; CLASSROOMS_OFFSET=0
+      fi
+      _async_start classrooms sjd_fetch_classrooms "${BUPTY_ACCOUNT}" "${BUPTY_PASSWORD}"
+    fi
   fi
-  _classrooms_render_content
+  if [[ -z "${CLASSROOMS_DATA}" ]]; then
+    printf '\n %s\n' "$(ui_paint muted '  正在加载空教室…')"
+  else
+    _classrooms_render_content
+  fi
+}
+
+# 后台拉取完成回调：读取数据并更新视图状态。
+apply_classrooms() {
+  local file="$1" data
+  data="$(cat "${file}" 2>/dev/null || true)"
+  if [[ "${data}" == ERROR:* ]]; then
+    core_err "${data#ERROR:}"
+    CLASSROOMS_LOADED=1
+    CLASSROOMS_ACCOUNT="${BUPTY_ACCOUNT}"
+    return 0
+  fi
+  if [[ -n "${data}" ]]; then
+    CLASSROOMS_DATA="${data}"
+    CLASSROOMS_ACCOUNT="${BUPTY_ACCOUNT}"
+    CLASSROOMS_LOADED=1
+    CLASSROOMS_CAMPUS=0
+    CLASSROOMS_BUILDING=""
+    CLASSROOMS_SEL=0
+    CLASSROOMS_OFFSET=0
+    _classrooms_precompute
+  else
+    core_err "加载失败。"
+    CLASSROOMS_LOADED=1
+    CLASSROOMS_ACCOUNT="${BUPTY_ACCOUNT}"
+  fi
+  return 0
 }
 
 # 按键处理：←/→ 切校区、f 循环楼筛选、↑/↓ 移动、PgUp/PgDn 翻页、r 刷新。

@@ -100,7 +100,8 @@ ui_hide_cursor() { printf '\033[?25l'; }
 ui_show_cursor() { printf '\033[?25h'; }
 
 # 备用屏幕缓冲区：TUI 帧不污染终端滚动历史，退出时还原原屏幕（同 vim/less）。
-ui_enter_alt_screen() { printf '\033[?1049h'; }
+# 同时关闭各种鼠标上报模式，避免滚轮产生鼠标转义序列干扰按键。
+ui_enter_alt_screen() { printf '\033[?1049h\033[?1000l\033[?1002l\033[?1003l\033[?1006l'; }
 ui_exit_alt_screen() { printf '\033[?1049l'; }
 
 # 进入 raw 模式（无回显、逐键）。
@@ -238,6 +239,13 @@ ui_read_key() {
           D) printf 'LEFT'; return 0 ;;
           H) printf 'HOME'; return 0 ;;
           F) printf 'END'; return 0 ;;
+          '<'|'M')  # 鼠标上报序列（SGR \033[<…M/m 或 X10 \033[M…），忽略。
+            local mm
+            while IFS= read -r -s -n1 -t 0.02 mm 2>/dev/null; do
+              [[ "${mm}" == "M" || "${mm}" == "m" ]] && break
+            done
+            printf 'IGNORE'; return 0
+            ;;
           [0-9])
             IFS= read -r -s -n1 -t 0.02 seq2 2>/dev/null || seq2=""
             if [[ "${seq2}" == "~" ]]; then

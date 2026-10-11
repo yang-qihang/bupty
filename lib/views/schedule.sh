@@ -21,6 +21,7 @@ SCHEDULE_CURRENT_WEEK="0"
 SCHEDULE_MIN_SLOT=""
 SCHEDULE_MAX_SLOT=""
 declare -A SCHEDULE_CELL_MAP=()  # 网格单元格映射（"day-slot" → 课程名），渲染时重建。
+declare -A SCHEDULE_DAY_MAP=()    # 各星期课程行映射（"1".."7" → 换行分隔的行串），切周时一次建好。
 
 # 是否需要（重新）加载：尚未加载，或账号已切换。
 _schedule_stale() {
@@ -111,28 +112,45 @@ _schedule_precompute_week() {
     done <<< "${SCHEDULE_CELL_TSV}"
   fi
 
-  _schedule_precompute_day
+  # 一次性预计算所有 7 天的课程行（按星期+周过滤），切星期时 O(1) 查找。
+  SCHEDULE_DAY_MAP=()
+  local line d rest
+  while IFS= read -r line; do
+    [[ -z "${line}" ]] && continue
+    d="${line%%$'\x1f'*}"
+    rest="${line#*$'\x1f'}"
+    if [[ -z "${SCHEDULE_DAY_MAP[${d}]+x}" ]]; then
+      SCHEDULE_DAY_MAP[${d}]="${rest}"
+    else
+      SCHEDULE_DAY_MAP[${d}]+=$'\n'"${rest}"
+    fi
+  done < <(printf '%s' "${SCHEDULE_DATA}" | jq -r --argjson w "${w}" '
+    [.courses[]?
+      | select(.weekday >= 1 and .weekday <= 7)
+      | select(((.week_numbers // []) | index($w)) != null)]
+    | sort_by(.weekday, .start_slot, .name)
+    | .[]
+    | [ (.weekday | tostring),
+        ((.time_range // "") | gsub("[\t\r\n]"; " ")),
+        ((.name // "") | gsub("[\t\r\n]"; " ")),
+        ((.room // "") | gsub("[\t\r\n]"; " ")),
+        ((.week_text // "") | gsub("[\t\r\n]"; " ")) ]
+    | join("\u001f")
+  ' 2>/dev/null || true)
+
+  _schedule_day_rows
 }
 
-# 预计算当前查看日的课程显示行（按星期 + 教学周过滤）。
-_schedule_precompute_day() {
+# 从预计算映射里取出当前查看星期的课程行（纯 bash，无 jq）。
+_schedule_day_rows() {
   SCHEDULE_DAY_ROWS=""
   SCHEDULE_DAY_COUNT=0
   if [[ -z "${SCHEDULE_DATA}" ]]; then
     return 0
   fi
-  local d w
+  local d
   d="$(_schedule_day)"
-  w="${SCHEDULE_WEEK:-${SCHEDULE_CURRENT_WEEK}}"
-  SCHEDULE_DAY_ROWS="$(printf '%s' "${SCHEDULE_DATA}" | jq -r --argjson d "${d}" --argjson w "${w}" '
-    [.courses[]? | select(.weekday == $d and ((.week_numbers // []) | index($w)) != null)] | sort_by(.start_slot, .name)
-    | .[]
-    | [ ((.time_range // "") | gsub("[\t\r\n]"; " ")),
-        ((.name // "") | gsub("[\t\r\n]"; " ")),
-        ((.room // "") | gsub("[\t\r\n]"; " ")),
-        ((.week_text // "") | gsub("[\t\r\n]"; " ")) ]
-    | join("\u001f")
-  ' 2>/dev/null || true)"
+  SCHEDULE_DAY_ROWS="${SCHEDULE_DAY_MAP[${d}]:-}"
   if [[ -n "${SCHEDULE_DAY_ROWS}" ]]; then
     SCHEDULE_DAY_COUNT="$(wc -l <<< "${SCHEDULE_DAY_ROWS}" 2>/dev/null || echo 0)"
     SCHEDULE_DAY_COUNT="${SCHEDULE_DAY_COUNT//[^0-9]/}"
@@ -398,9 +416,45 @@ render_schedule() {
     return 0
   fi
   if _schedule_stale; then
-    schedule_fetch
+    if [[ -z "${TUI_FETCH_PID}" ]]; then
+      if [[ "${SCHEDULE_ACCOUNT}" != "${BUPTY_ACCOUNT}" ]]; then
+        SCHEDULE_DATA=""; SCHEDULE_CELL_TSV=""; SCHEDULE_CELL_MAP=(); SCHEDULE_DAY_MAP=()
+        SCHEDULE_DAY_ROWS=""; SCHEDULE_DAY_COUNT=0; SCHEDULE_DAY=""; SCHEDULE_WEEK=""
+        SCHEDULE_SEL=0; SCHEDULE_OFFSET=0
+      fi
+      _async_start schedule sjd_fetch_schedule "${BUPTY_ACCOUNT}" "${BUPTY_PASSWORD}"
+    fi
   fi
-  _schedule_render_content
+  if [[ -z "${SCHEDULE_DATA}" ]]; then
+    printf '\n %s\n' "$(ui_paint muted '  正在加载课表…')"
+  else
+    _schedule_render_content
+  fi
+}
+
+# 后台拉取完成回调：读取数据并更新视图状态。
+apply_schedule() {
+  local file="$1" data
+  data="$(cat "${file}" 2>/dev/null || true)"
+  if [[ "${data}" == ERROR:* ]]; then
+    core_err "${data#ERROR:}"
+    SCHEDULE_LOADED=1
+    SCHEDULE_ACCOUNT="${BUPTY_ACCOUNT}"
+    return 0
+  fi
+  if [[ -n "${data}" ]]; then
+    SCHEDULE_DATA="${data}"
+    SCHEDULE_ACCOUNT="${BUPTY_ACCOUNT}"
+    SCHEDULE_LOADED=1
+    SCHEDULE_SEL=0
+    SCHEDULE_OFFSET=0
+    _schedule_precompute
+  else
+    core_err "加载失败。"
+    SCHEDULE_LOADED=1
+    SCHEDULE_ACCOUNT="${BUPTY_ACCOUNT}"
+  fi
+  return 0
 }
 
 # 按键处理：←/→ 切星期、↑/↓ 移动、PgUp/PgDn 翻页、r 刷新。
@@ -413,14 +467,14 @@ handle_schedule_key() {
       if (( SCHEDULE_DAY < 1 )); then SCHEDULE_DAY=7; fi
       SCHEDULE_SEL=0
       SCHEDULE_OFFSET=0
-      _schedule_precompute_day
+      _schedule_day_rows
       ;;
     RIGHT)
       SCHEDULE_DAY=$(( $( _schedule_day ) + 1 ))
       if (( SCHEDULE_DAY > 7 )); then SCHEDULE_DAY=1; fi
       SCHEDULE_SEL=0
       SCHEDULE_OFFSET=0
-      _schedule_precompute_day
+      _schedule_day_rows
       ;;
     UP)
       if (( SCHEDULE_SEL > 0 )); then SCHEDULE_SEL=$((SCHEDULE_SEL - 1)); fi
