@@ -277,9 +277,7 @@ render_classrooms() {
     return 0
   fi
   if _classrooms_stale; then
-    printf ' %s\n' "$(ui_paint muted '  正在加载…')"
     classrooms_fetch
-    ui_erase_prev_line
   fi
   _classrooms_render_content
 }

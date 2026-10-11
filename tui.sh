@@ -126,14 +126,19 @@ tui_render_footer() {
 }
 
 # 整屏渲染：标题 + 内容 + 底部。
+# 先写入临时帧缓冲（花括号组，全局状态保留），再一次性输出，避免逐行重绘闪烁。
 tui_render() {
-  ui_clear
-  tui_render_header
-  local i
-  for ((i = 0; i < UI_COLS; i++)); do printf '%s' "${_UI_BOX_H}"; done
-  printf '\n'
-  render_${TUI_VIEW} || true
-  tui_render_footer
+  {
+    printf '\033[H'
+    tui_render_header
+    local i
+    for ((i = 0; i < UI_COLS; i++)); do printf '%s' "${_UI_BOX_H}"; done
+    printf '\n'
+    render_${TUI_VIEW} || true
+    tui_render_footer
+    printf '\033[J'
+  } > "${TUI_FRAME_FILE}"
+  printf '%s' "$(< "${TUI_FRAME_FILE}")"
 }
 
 # ---------------------------------------------------------------------------
@@ -148,7 +153,8 @@ tui_main() {
   ui_raw_mode
   ui_hide_cursor
   ui_enter_alt_screen
-  trap 'ui_exit_alt_screen; ui_restore_mode' EXIT
+  TUI_FRAME_FILE="$(mktemp)"
+  trap 'rm -f "${TUI_FRAME_FILE}"; ui_exit_alt_screen; ui_restore_mode' EXIT
   # 窗口尺寸变化时置位，主循环在下个超时点立即重绘（响应 resize）。
   trap 'TUI_RESIZED=1' WINCH
 
@@ -188,5 +194,7 @@ tui_render_once() {
   ui_box_init
   ui_size
   creds_load || true
+  TUI_FRAME_FILE="$(mktemp)"
   tui_render
+  rm -f "${TUI_FRAME_FILE}"
 }

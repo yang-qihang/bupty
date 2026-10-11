@@ -180,9 +180,7 @@ render_exams() {
     return 0
   fi
   if _exams_stale; then
-    printf ' %s\n' "$(ui_paint muted '  正在加载…')"
     exams_fetch
-    ui_erase_prev_line
   fi
   _exams_render_content
 }

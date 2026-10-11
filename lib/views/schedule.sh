@@ -10,6 +10,8 @@ SCHEDULE_LOADED=0     # 是否已为当前账号加载过（含失败）。
 SCHEDULE_SEL=0        # 课程列表选中行。
 SCHEDULE_OFFSET=0     # 课程列表滚动偏移。
 SCHEDULE_DAY=""       # 查看的星期几（1=周一..7=周日，空=今天）。
+SCHEDULE_WEEK=""      # 查看的教学周（空=当前周）。
+SCHEDULE_WEEK_MAX="0" # 课表中出现的最大教学周（切周边界）。
 SCHEDULE_CELL_TSV=""  # 网格预计算（weekday\tstart_slot\tname，按 courses 顺序逐节展开）。
 SCHEDULE_DAY_ROWS=""  # 当前查看日的课程显示行（TSV：time_range、name、room、week_text）。
 SCHEDULE_DAY_COUNT=0  # 当前查看日的课程条数。
@@ -44,36 +46,16 @@ _schedule_day_count() {
   printf '%s' "${SCHEDULE_DAY_COUNT:-0}"
 }
 
-# 预计算网格单元格与学期元信息（拉取成功后一次 jq）。
+# 预计算学期元信息与切周边界（拉取成功后一次 jq）。
 _schedule_precompute() {
-  SCHEDULE_CELL_TSV=""
   SCHEDULE_TERM_ID=""
   SCHEDULE_TERM_START=""
   SCHEDULE_CURRENT_WEEK="0"
   SCHEDULE_MIN_SLOT=""
   SCHEDULE_MAX_SLOT=""
-  SCHEDULE_DAY_ROWS=""
-  SCHEDULE_DAY_COUNT=0
+  SCHEDULE_WEEK_MAX="0"
   if [[ -z "${SCHEDULE_DATA}" ]]; then
     return 0
-  fi
-
-  SCHEDULE_CELL_TSV="$(printf '%s' "${SCHEDULE_DATA}" | jq -r '
-    .courses[]?
-    | select((.weekday | type) == "number" and (.start_slot | type) == "number" and (.end_slot | type) == "number")
-    | . as $c
-    | range($c.start_slot; $c.end_slot + 1)
-    | [ $c.weekday, ., (($c.name // "") | gsub("[\t\r\n]"; " ")) ]
-    | join("\u001f")
-  ' 2>/dev/null || true)"
-
-  # 预构建网格单元格映射（"day-slot" → 课程名，多门取第一门）。
-  SCHEDULE_CELL_MAP=()
-  if [[ -n "${SCHEDULE_CELL_TSV}" ]]; then
-    local cd cslot cname
-    while IFS=$'\x1f' read -r cd cslot cname; do
-      [[ -z "${SCHEDULE_CELL_MAP["${cd}-${cslot}"]+x}" ]] && SCHEDULE_CELL_MAP["${cd}-${cslot}"]="${cname}"
-    done <<< "${SCHEDULE_CELL_TSV}"
   fi
 
   local meta
@@ -82,25 +64,68 @@ _schedule_precompute() {
       (.term_start_date // ""),
       ((.current_week // 0) | tostring),
       (([.courses[]?.start_slot] | min // "") | tostring),
-      (([.courses[]?.end_slot] | max // "") | tostring) ]
+      (([.courses[]?.end_slot] | max // "") | tostring),
+      (([.courses[]?.week_numbers[]?] | max // 0) | tostring) ]
     | join("\u001f")
   ' 2>/dev/null || true)"
-  IFS=$'\x1f' read -r SCHEDULE_TERM_ID SCHEDULE_TERM_START SCHEDULE_CURRENT_WEEK SCHEDULE_MIN_SLOT SCHEDULE_MAX_SLOT <<< "${meta}"
+  IFS=$'\x1f' read -r SCHEDULE_TERM_ID SCHEDULE_TERM_START SCHEDULE_CURRENT_WEEK SCHEDULE_MIN_SLOT SCHEDULE_MAX_SLOT SCHEDULE_WEEK_MAX <<< "${meta}"
+
+  # 默认查看当前周；切周边界为 [1, 最大周]。
+  if ! [[ "${SCHEDULE_WEEK:-}" =~ ^[0-9]+$ ]]; then
+    SCHEDULE_WEEK="${SCHEDULE_CURRENT_WEEK}"
+  fi
+  if [[ -z "${SCHEDULE_WEEK_MAX}" || "${SCHEDULE_WEEK_MAX}" == "0" ]]; then
+    SCHEDULE_WEEK_MAX="${SCHEDULE_CURRENT_WEEK}"
+  fi
+
+  _schedule_precompute_week
+}
+
+# 预计算当前查看周的网格单元格与当前查看日的课程显示行。
+# 在拉取成功、切周（[ / ]）或切星期（←/→）后调用。
+_schedule_precompute_week() {
+  SCHEDULE_CELL_TSV=""
+  SCHEDULE_CELL_MAP=()
+  SCHEDULE_DAY_ROWS=""
+  SCHEDULE_DAY_COUNT=0
+  if [[ -z "${SCHEDULE_DATA}" ]]; then
+    return 0
+  fi
+  local w
+  w="${SCHEDULE_WEEK:-${SCHEDULE_CURRENT_WEEK}}"
+
+  SCHEDULE_CELL_TSV="$(printf '%s' "${SCHEDULE_DATA}" | jq -r --argjson w "${w}" '
+    .courses[]?
+    | select((.weekday | type) == "number" and (.start_slot | type) == "number" and (.end_slot | type) == "number")
+    | select(((.week_numbers // []) | index($w)) != null)
+    | . as $c
+    | range($c.start_slot; $c.end_slot + 1)
+    | [ $c.weekday, ., (($c.name // "") | gsub("[\t\r\n]"; " ")) ]
+    | join("\u001f")
+  ' 2>/dev/null || true)"
+
+  if [[ -n "${SCHEDULE_CELL_TSV}" ]]; then
+    local cd cslot cname
+    while IFS=$'\x1f' read -r cd cslot cname; do
+      [[ -z "${SCHEDULE_CELL_MAP["${cd}-${cslot}"]+x}" ]] && SCHEDULE_CELL_MAP["${cd}-${cslot}"]="${cname}"
+    done <<< "${SCHEDULE_CELL_TSV}"
+  fi
 
   _schedule_precompute_day
 }
 
-# 预计算当前查看日的课程显示行（拉取成功或切换 ←/→ 后调用）。
+# 预计算当前查看日的课程显示行（按星期 + 教学周过滤）。
 _schedule_precompute_day() {
   SCHEDULE_DAY_ROWS=""
   SCHEDULE_DAY_COUNT=0
   if [[ -z "${SCHEDULE_DATA}" ]]; then
     return 0
   fi
-  local d
+  local d w
   d="$(_schedule_day)"
-  SCHEDULE_DAY_ROWS="$(printf '%s' "${SCHEDULE_DATA}" | jq -r --argjson d "${d}" '
-    [.courses[]? | select(.weekday == $d)] | sort_by(.start_slot, .name)
+  w="${SCHEDULE_WEEK:-${SCHEDULE_CURRENT_WEEK}}"
+  SCHEDULE_DAY_ROWS="$(printf '%s' "${SCHEDULE_DATA}" | jq -r --argjson d "${d}" --argjson w "${w}" '
+    [.courses[]? | select(.weekday == $d and ((.week_numbers // []) | index($w)) != null)] | sort_by(.start_slot, .name)
     | .[]
     | [ ((.time_range // "") | gsub("[\t\r\n]"; " ")),
         ((.name // "") | gsub("[\t\r\n]"; " ")),
@@ -123,6 +148,7 @@ schedule_fetch() {
     SCHEDULE_DAY_ROWS=""
     SCHEDULE_DAY_COUNT=0
     SCHEDULE_DAY=""
+    SCHEDULE_WEEK=""
     SCHEDULE_SEL=0
     SCHEDULE_OFFSET=0
   fi
@@ -342,14 +368,17 @@ _schedule_render_content() {
   fi
 
   local term_id="${SCHEDULE_TERM_ID}" term_start_date="${SCHEDULE_TERM_START}" current_week="${SCHEDULE_CURRENT_WEEK}"
+  local sel_week="${SCHEDULE_WEEK:-${current_week}}"
 
   local week_disp
-  if (( current_week < 1 )); then
+  if [[ "${sel_week}" != "${current_week}" ]]; then
+    week_disp="第 ${sel_week} 周（当前第 ${current_week} 周）"
+  elif (( current_week < 1 )); then
     week_disp="第 ${current_week} 周（未开学）"
   else
     week_disp="第 ${current_week} 周"
   fi
-  printf ' %s\n' "$(ui_paint muted "学期 ${term_id} · ${week_disp} · 开学 ${term_start_date}")"
+  printf ' %s\n' "$(ui_paint muted "学期 ${term_id} · ${week_disp} · 开学 ${term_start_date} · [ ] 切周")"
   printf '\n'
 
   if [[ -z "${SCHEDULE_MIN_SLOT}" || -z "${SCHEDULE_MAX_SLOT}" ]]; then
@@ -369,9 +398,7 @@ render_schedule() {
     return 0
   fi
   if _schedule_stale; then
-    printf ' %s\n' "$(ui_paint muted '  正在加载…')"
     schedule_fetch
-    ui_erase_prev_line
   fi
   _schedule_render_content
 }
@@ -411,6 +438,24 @@ handle_schedule_key() {
       SCHEDULE_SEL=$((SCHEDULE_SEL + 10))
       if (( total > 0 && SCHEDULE_SEL >= total )); then SCHEDULE_SEL=$((total - 1)); fi
       if (( SCHEDULE_SEL < 0 )); then SCHEDULE_SEL=0; fi
+      ;;
+    '[')
+      # 上一周（边界：不低于第 1 周）。
+      if (( SCHEDULE_WEEK > 1 )); then
+        SCHEDULE_WEEK=$((SCHEDULE_WEEK - 1))
+        SCHEDULE_SEL=0
+        SCHEDULE_OFFSET=0
+        _schedule_precompute_week
+      fi
+      ;;
+    ']')
+      # 下一周（边界：不超过课表最大周）。
+      if (( SCHEDULE_WEEK < SCHEDULE_WEEK_MAX )); then
+        SCHEDULE_WEEK=$((SCHEDULE_WEEK + 1))
+        SCHEDULE_SEL=0
+        SCHEDULE_OFFSET=0
+        _schedule_precompute_week
+      fi
       ;;
     r)
       schedule_refresh
