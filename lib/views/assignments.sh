@@ -265,6 +265,37 @@ _assignments_mark_submitted() {
 }
 
 # 提交流程：同步、逐步交互，Esc 任一步可安全取消。
+# 显示作业提交说明（多行、彩色、有层次；行宽随终端自适应截断）。
+_submit_show_instructions() {
+  local target="$1" i ext_w desc_w
+  local -a cats=("音频" "视频" "图片" "文档" "PPT" "压缩包")
+  local -a exts=("mp3、m4a" "mp4" "jpg、gif、png、jpeg" "txt、doc、docx、pdf、xls、xlsx" "ppt、pptx" "rar、zip")
+  local -a sizes=("100MB" "200MB" "20MB" "100MB" "300MB" "3GB")
+  # 扩展名+大小 列的可用宽度（前缀 "    · 分类 " 约 12 列 + 余量）。
+  ext_w=$((UI_COLS - 16))
+  (( ext_w < 8 )) && ext_w=8
+  desc_w=$((UI_COLS - 8))
+  (( desc_w < 10 )) && desc_w=10
+
+  printf ' %s\n' "$(ui_paint title '作业提交')"
+  printf ' %s\n' "$(ui_paint muted "  $(core_fit "${target}" "$((UI_COLS - 4))")")"
+  printf '\n'
+  printf ' %s\n' "$(ui_paint accent '附件约束')"
+  printf ' %s\n' "$(ui_paint warning '  最多 10 个附件')"
+  for ((i = 0; i < 6; i++)); do
+    printf '    · %s %s\n' \
+      "$(ui_paint text "$(core_fit "${cats[$i]}" 6)")" \
+      "$(ui_paint muted "$(core_fit "${exts[$i]}  ≤ ${sizes[$i]}" "${ext_w}")")"
+  done
+  printf '\n'
+  printf ' %s\n' "$(ui_paint accent '提交方式说明')"
+  printf ' %s\n' "$(ui_paint text '  指定文件夹')"
+  printf ' %s\n' "$(ui_paint muted "      $(core_fit 'homework_content.txt 作为作业内容文字；其余合规文件作为附件' "${desc_w}")")"
+  printf ' %s\n' "$(ui_paint text '  指定单个文件')"
+  printf ' %s\n' "$(ui_paint muted "      $(core_fit '该文件作为唯一附件（无内容文字）' "${desc_w}")")"
+  printf '\n'
+}
+
 _assignments_submit_flow() {
   local obj id title course deadline status
   if ! obj="$(_assignments_selected)"; then
@@ -281,23 +312,19 @@ _assignments_submit_flow() {
     return 1
   fi
 
-  # 说明：附件约束 / homework_content.txt 语义 / 两种方式区别。
-  if ! ui_input "作业提交说明：附件支持 mp3/m4a≤100MB、mp4≤200MB、jpg/gif/png/jpeg≤20MB、txt/doc/docx/pdf/xls/xlsx≤100MB、ppt/pptx≤300MB、rar/zip≤3GB，最多 10 个。方式1=指定文件夹（目录内 homework_content.txt 作为作业内容文字，其余合规文件作为附件）；方式2=指定单个文件（仅作附件，无内容文字）。回车开始，Esc 取消。" "" 0 0; then
-    core_err "已取消提交。"
-    return 1
-  fi
+  # 清屏展示提交对话框（说明用多行彩色，避免单行长文本换行/重复）。
+  ui_clear
+  tui_render_header
+  local target=""
+  target="【${course}】${title}"
+  [[ -n "${deadline}" ]] && target+="（截止 ${deadline}）"
+  [[ -n "${status}" ]] && target+="（${status}）"
+  _submit_show_instructions "${target}"
 
-  # 作业信息 + 选择提交方式。
-  local info=""
-  info="【${course}】${title}"
-  [[ -n "${deadline}" ]] && info+="（截止 ${deadline}）"
-  [[ -n "${status}" ]] && info+="（${status}）"
-  if ! ui_input "${info} 提交方式：1=指定文件夹，2=指定单个文件（Esc 取消）" "" 0 1; then
-    core_err "已取消提交。"
-    return 1
-  fi
-  local method="${UI_INPUT_RESULT}"
-  if [[ "${method}" != "1" && "${method}" != "2" ]]; then
+  # 选择提交方式（方向键高亮选择，与全 app 一致）。
+  printf ' %s\n' "$(ui_paint muted '提交方式（↑↓ 选择 · Enter 确认 · Esc 取消）')"
+  local method
+  if ! method="$(ui_select_option '1|指定文件夹' '2|指定单个文件')"; then
     core_err "已取消提交。"
     return 1
   fi

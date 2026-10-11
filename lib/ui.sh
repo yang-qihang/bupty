@@ -330,3 +330,39 @@ ui_input() {
   UI_INPUT_RESULT="${buf}"
   return 0
 }
+
+# ---------------------------------------------------------------------------
+# 方向键选择菜单（与全 app 的「高亮选中 + ↑↓ 移动 + Enter 确认」一致）
+# ---------------------------------------------------------------------------
+
+# ui_select_option "值1|显示1" "值2|显示2" ...（无 "|" 时值=显示）
+# ↑↓ 移动焦点、Enter 确认并输出选中值、Esc/q 返回非 0。
+# 渲染在当前光标位置，每次重画前上移清掉上一帧选项区。
+ui_select_option() {
+  local -a opts=("$@")
+  local sel=0 key i n="${#opts[@]}" value label
+  [[ "${n}" -eq 0 ]] && return 1
+  while :; do
+    for ((i = 0; i < n; i++)); do
+      label="${opts[$i]#*|}"
+      if (( i == sel )); then
+        printf '\r\033[K %s\n' "$(ui_paint hl "› ${label}")"
+      else
+        printf '\r\033[K   %s\n' "$(ui_paint text "${label}")"
+      fi
+    done
+    key="$(ui_read_key)"
+    case "${key}" in
+      UP) (( sel > 0 )) && (( sel-- )) ;;
+      DOWN) (( sel < n - 1 )) && (( sel++ )) ;;
+      ENTER)
+        value="${opts[$sel]}"
+        [[ "${value}" == *\|* ]] && value="${value%%|*}"
+        printf '%s' "${value}"
+        return 0
+        ;;
+      ESC|q) return 1 ;;
+    esac
+    printf '\033[%dA' "${n}"
+  done
+}
