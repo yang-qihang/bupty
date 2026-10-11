@@ -98,12 +98,12 @@ _classrooms_filtered() {
   _CLASSROOMS_COUNT="${#_CLASSROOMS_ROWS[@]}"
 }
 
-# 当前校区楼名（每行一个）。
+# 当前校区楼名（每行一个，末尾补换行，避免 while read 丢末行）。
 _classrooms_buildings() {
   if (( CLASSROOMS_CAMPUS == 0 )); then
-    printf '%s' "${CLASSROOMS_CAMPUS0_BUILDINGS}"
+    [[ -n "${CLASSROOMS_CAMPUS0_BUILDINGS}" ]] && printf '%s\n' "${CLASSROOMS_CAMPUS0_BUILDINGS}"
   else
-    printf '%s' "${CLASSROOMS_CAMPUS1_BUILDINGS}"
+    [[ -n "${CLASSROOMS_CAMPUS1_BUILDINGS}" ]] && printf '%s\n' "${CLASSROOMS_CAMPUS1_BUILDINGS}"
   fi
 }
 

@@ -583,8 +583,14 @@ sjd_parse_grade_terms() {
   if [[ "${has_current}" != "true" ]]; then
     terms_json="$(printf '%s' "${terms_json}" | jq -c --arg t "${current_term_id}" '[{id:$t, name:$t}] + .' 2>/dev/null || true)"
   fi
-  jq -n --arg t "${current_term_id}" --argjson terms "${terms_json}" \
-    '{current_term_id:$t, terms:$terms}'
+  # 排序：当前学期在前，接着过去的学期（按 id 降序，最近在前），再是未来学期（升序）。
+  # 这样 t（下一个）先从当前往后走历史学期，方便查过往成绩。
+  jq -n --arg t "${current_term_id}" --argjson terms "${terms_json}" '
+    { current_term_id: $t,
+      terms: (($terms | map(select(.id == $t)))
+              + ($terms | map(select(.id < $t)) | sort_by(.id) | reverse)
+              + ($terms | map(select(.id > $t)) | sort_by(.id))) }
+  '
 }
 
 # 解析成绩 payload（student/termGPA）为 {"term_id","record_type","average_grade_point","items":[...]}。

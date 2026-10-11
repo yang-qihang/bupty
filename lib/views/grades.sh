@@ -199,7 +199,7 @@ _grades_render_content() {
   avg="$(printf '%s' "${GRADES_DATA}" | jq -r '.average_grade_point // ""' 2>/dev/null || true)"
   total="$(_grades_count)"
   avg_disp="${avg:-—}"
-  printf ' %s\n' "$(ui_paint muted "学期 ${term_name} · 记录类型 ${record_name} · 平均绩点 ${avg_disp} · 共 ${total} 条 · t 切学期 · p 切类型 · ↑↓ 选择 · r 刷新")"
+  printf ' %s\n' "$(ui_paint muted "学期 ${term_name} · 记录类型 ${record_name} · 平均绩点 ${avg_disp} · 共 ${total} 条 · t/T 切学期 · p 切类型 · ↑↓ 选择 · r 刷新")"
   printf '\n'
 
   if (( total == 0 )); then
@@ -301,11 +301,15 @@ handle_grades_key() {
   local key="$1"
   local total count old
   case "${key}" in
-    t)
+    t|T)
       count="$(printf '%s' "${GRADES_TERMS}" | jq -r 'if (.terms | type) == "array" then (.terms | length | tostring) else "0" end' 2>/dev/null || true)"
       if [[ "${count}" =~ ^[0-9]+$ ]] && (( count > 1 )); then
         old="${GRADES_SEL_TERM}"
-        GRADES_SEL_TERM=$(( (GRADES_SEL_TERM + 1) % count ))
+        if [[ "${key}" == "T" ]]; then
+          GRADES_SEL_TERM=$(( (GRADES_SEL_TERM - 1 + count) % count ))
+        else
+          GRADES_SEL_TERM=$(( (GRADES_SEL_TERM + 1) % count ))
+        fi
         if ! grades_fetch_report; then
           GRADES_SEL_TERM="${old}"
         fi
