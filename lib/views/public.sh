@@ -16,6 +16,7 @@ PUBLIC_HOLIDAY_YEAR=""    # 当前选中年份（空则默认今年）。
 PUBLIC_HOLIDAYS_YEAR=""   # 已加载节假日数据所属年份。
 PUBLIC_SEL=0              # 活动选中行。
 PUBLIC_OFFSET=0           # 列表滚动偏移。
+PUBLIC_EVENTS_ROWS=""     # 预计算活动行（TSV：deadline_ts、显示行），含已截止，渲染时纯 bash 过滤。
 
 # 待输出行（班车视图先收集再按窗口输出，便于整屏滚动）。
 _PUBLIC_LINES=()
@@ -100,6 +101,7 @@ _public_fetch_events() {
     PUBLIC_EVENTS="${data}"
     PUBLIC_LOADED_EVENTS=1
     core_clear_err
+    _public_precompute_events
     return 0
   fi
   rm -f "${tmp}"
@@ -265,34 +267,55 @@ _public_render_holidays() {
 # 活动子页
 # ---------------------------------------------------------------------------
 
-# 未截止活动（视图层过滤已截止），按截止升序。
-_public_events_visible() {
-  local now_rfc
-  now_rfc="$(core_now_rfc3339)"
-  printf '%s' "${PUBLIC_EVENTS}" | jq -c --arg now "${now_rfc}" \
-    '[.items[]? | select(.primary_deadline >= $now)] | sort_by(.primary_deadline, .name)' 2>/dev/null || true
+# 预计算活动行（一次 jq，含已截止，按 deadline_ts/name 升序）。渲染时纯 bash 过滤。
+_public_precompute_events() {
+  PUBLIC_EVENTS_ROWS=""
+  if [[ -z "${PUBLIC_EVENTS}" ]]; then
+    return 0
+  fi
+  PUBLIC_EVENTS_ROWS="$(printf '%s' "${PUBLIC_EVENTS}" | jq -r '
+    [.items[]?] | sort_by(.deadline_ts, .name)
+    | .[]
+    | ((.categories // []) | join("/")) as $cat
+    | (.organizer // "") as $org
+    | ($cat + (if $org != "" then " · " + $org else "" end)) as $meta
+    | ((.primary_deadline // "")[0:10]) as $date_disp
+    | ($date_disp + "  " + (.name // "") + (if $meta != "" then " · " + $meta else "" end)) as $line
+    | [ (.deadline_ts // 0), ($line | gsub("[\t\r\n]"; " ")) ]
+    | join("\u001f")
+  ' 2>/dev/null || true)"
+}
+
+# 过滤未截止活动（纯 bash，数值比较 deadline_ts），输出到 _PUBLIC_VISIBLE_ROWS。
+_public_events_filter() {
+  _PUBLIC_VISIBLE_ROWS=()
+  _PUBLIC_VISIBLE_COUNT=0
+  if [[ -z "${PUBLIC_EVENTS_ROWS}" ]]; then
+    return 0
+  fi
+  local now_epoch
+  now_epoch="$(date +%s)"
+  local -a all=()
+  readarray -t all <<< "${PUBLIC_EVENTS_ROWS}"
+  local i ts line
+  for ((i = 0; i < ${#all[@]}; i++)); do
+    IFS=$'\x1f' read -r ts line <<< "${all[$i]}"
+    if [[ "${ts}" =~ ^[0-9]+$ ]] && (( ts >= now_epoch )); then
+      _PUBLIC_VISIBLE_ROWS+=("${line}")
+    fi
+  done
+  _PUBLIC_VISIBLE_COUNT="${#_PUBLIC_VISIBLE_ROWS[@]}"
 }
 
 _public_events_count() {
-  local n
-  n="$(printf '%s' "$(_public_events_visible)" | jq -r 'if type=="array" then (length|tostring) else "0" end' 2>/dev/null || true)"
-  if [[ -z "${n}" || "${n}" == "null" ]]; then printf '0'; else printf '%s' "${n}"; fi
+  _public_events_filter
+  printf '%s' "${_PUBLIC_VISIBLE_COUNT}"
 }
 
 _public_render_event_row() {
-  local i="$1" items="$2"
-  local row name pd cat org line date_disp meta
-  row="$(printf '%s' "${items}" | jq -c '.['"${i}"']' 2>/dev/null || true)"
-  [[ -z "${row}" || "${row}" == "null" ]] && return 0
-  name="$(printf '%s' "${row}" | jq -r '.name // ""' 2>/dev/null || true)"
-  pd="$(printf '%s' "${row}" | jq -r '.primary_deadline // ""' 2>/dev/null || true)"
-  cat="$(printf '%s' "${row}" | jq -r '(.categories // []) | join("/")' 2>/dev/null || true)"
-  org="$(printf '%s' "${row}" | jq -r '.organizer // ""' 2>/dev/null || true)"
-  date_disp="${pd:0:10}"
-  meta="${cat}"
-  [[ -n "${org}" ]] && meta="${meta} · ${org}"
-  line="${date_disp}  ${name}"
-  [[ -n "${meta}" ]] && line+=" · ${meta}"
+  local i="$1"
+  local line="${_PUBLIC_VISIBLE_ROWS[$i]:-}"
+  [[ -z "${line}" ]] && return 0
   if [[ "${i}" -eq "${PUBLIC_SEL}" ]]; then
     printf ' %s\n' "$(ui_paint hl "› $(core_fit "${line}" "$((UI_COLS - 4))")")"
   else
@@ -311,8 +334,9 @@ _public_render_events() {
     return 0
   fi
 
+  _public_events_filter
   local total
-  total="$(_public_events_count)"
+  total="${_PUBLIC_VISIBLE_COUNT}"
   printf ' %s\n' "$(ui_paint muted "活动 · 未截止 ${total} 条 · ↑↓ 选择 · PgUp/PgDn 翻页 · r 刷新")"
   printf '\n'
 
@@ -321,8 +345,7 @@ _public_render_events() {
     return 0
   fi
 
-  local items visible offset end i
-  items="$(_public_events_visible)"
+  local visible offset end i
   visible=$((UI_ROWS - 7))
   (( visible < 4 )) && visible=4
   if (( PUBLIC_SEL >= total )); then PUBLIC_SEL=$((total - 1)); fi
@@ -334,7 +357,7 @@ _public_render_events() {
   end=$((offset + visible))
   (( end > total )) && end=${total}
   for ((i = offset; i < end; i++)); do
-    _public_render_event_row "${i}" "${items}"
+    _public_render_event_row "${i}"
   done
 }
 

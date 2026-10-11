@@ -9,6 +9,9 @@ ASSIGNMENTS_ACCOUNT=""   # 数据所属账号。
 ASSIGNMENTS_LOADED=0     # 是否已为当前账号加载过（含失败）。
 ASSIGNMENTS_SEL=0        # 当前选中行。
 ASSIGNMENTS_OFFSET=0     # 列表滚动偏移。
+ASSIGNMENTS_ROWS=""      # 预计算显示行（每行 TSV：deadline_disp、days_disp、course、title、status）。
+ASSIGNMENTS_COLORS=""    # 预计算每行紧急程度色（danger/warning/text）。
+ASSIGNMENTS_COUNT=0      # 预计算条数。
 
 # 是否需要（重新）加载：尚未加载，或账号已切换。
 _assignments_stale() {
@@ -17,12 +20,53 @@ _assignments_stale() {
 
 # 作业条数。
 _assignments_count() {
-  local n
-  n="$(printf '%s' "${ASSIGNMENTS_DATA:-}" | jq -r 'if type == "array" then (length | tostring) else "0" end' 2>/dev/null || true)"
-  if [[ -z "${n}" || "${n}" == "null" ]]; then
+  if [[ -z "${ASSIGNMENTS_DATA}" ]]; then
     printf '0'
   else
-    printf '%s' "${n}"
+    printf '%s' "${ASSIGNMENTS_COUNT:-0}"
+  fi
+}
+
+# 预计算显示数据：一次 jq 把 items 转成 TSV，渲染时纯 bash 读取。
+_assignments_precompute() {
+  ASSIGNMENTS_ROWS=""
+  ASSIGNMENTS_COLORS=""
+  ASSIGNMENTS_COUNT=0
+  if [[ -z "${ASSIGNMENTS_DATA}" ]]; then
+    return 0
+  fi
+  local today combined
+  today="$(core_today)"
+  combined="$(printf '%s' "${ASSIGNMENTS_DATA}" | jq -r --arg today "${today}" '
+    def s: gsub("[\t\r\n]"; " ");
+    . as $items
+    | (if ($items | type) == "array" then $items else [] end)
+    | ($today | strptime("%Y-%m-%d") | mktime) as $today_ts
+    | .[]
+    | .deadline // "" as $dl
+    | .course_name // "" as $course
+    | .title // "" as $title
+    | .status // "" as $status
+    | ($dl | if . == "" then 0
+             else (try (((($dl[0:10]) | strptime("%Y-%m-%d") | mktime) - $today_ts) / 86400) catch 0) end
+             | floor) as $days
+    | ($dl | if . == "" then "" else $dl[0:16] end) as $deadline_disp
+    | ($dl | if . == "" then "—"
+             elif $days < 0 then ("已截止 " + ((-$days) | tostring) + " 天")
+             elif $days == 0 then "今天截止"
+             else ("剩 " + ($days | tostring) + " 天") end) as $days_disp
+    | ($dl | if . == "" then "text"
+             elif $days < 0 or $days == 0 then "danger"
+             elif $days <= 3 then "warning"
+             else "text" end) as $color
+    | [ $color, ($deadline_disp | s), ($days_disp | s), ($course | s), ($title | s), ($status | s) ]
+    | join("\u001f")
+  ' 2>/dev/null || true)"
+  if [[ -n "${combined}" ]]; then
+    ASSIGNMENTS_COLORS="$(printf '%s' "${combined}" | cut -d $'\x1f' -f1 2>/dev/null || true)"
+    ASSIGNMENTS_ROWS="$(printf '%s' "${combined}" | cut -d $'\x1f' -f2- 2>/dev/null || true)"
+    ASSIGNMENTS_COUNT="$(wc -l <<< "${ASSIGNMENTS_ROWS}" 2>/dev/null || echo 0)"
+    ASSIGNMENTS_COUNT="${ASSIGNMENTS_COUNT//[^0-9]/}"
   fi
 }
 
@@ -31,6 +75,9 @@ assignments_fetch() {
   # 账号切换时先清空旧账号数据，避免跨账号残留泄漏。
   if [[ "${ASSIGNMENTS_ACCOUNT}" != "${BUPTY_ACCOUNT}" ]]; then
     ASSIGNMENTS_DATA=""
+    ASSIGNMENTS_ROWS=""
+    ASSIGNMENTS_COLORS=""
+    ASSIGNMENTS_COUNT=0
     ASSIGNMENTS_SEL=0
     ASSIGNMENTS_OFFSET=0
   fi
@@ -45,6 +92,7 @@ assignments_fetch() {
     ASSIGNMENTS_LOADED=1
     ASSIGNMENTS_SEL=0
     ASSIGNMENTS_OFFSET=0
+    _assignments_precompute
     return 0
   fi
   rm -f "${tmp}"
@@ -74,44 +122,15 @@ assignments_refresh() {
 # 渲染单行：截止日期 + 剩余天数 + 课程名 + 作业标题 + 状态。
 _assignments_render_row() {
   local i="$1"
-  local row deadline course title status
-  row="$(printf '%s' "${ASSIGNMENTS_DATA}" | jq -c '.['"${i}"']' 2>/dev/null || true)"
-  [[ -z "${row}" || "${row}" == "null" ]] && return 0
-  deadline="$(printf '%s' "${row}" | jq -r '.deadline // ""' 2>/dev/null || true)"
-  course="$(printf '%s' "${row}" | jq -r '.course_name // ""' 2>/dev/null || true)"
-  title="$(printf '%s' "${row}" | jq -r '.title // ""' 2>/dev/null || true)"
-  status="$(printf '%s' "${row}" | jq -r '.status // ""' 2>/dev/null || true)"
-
-  local deadline_disp="${deadline:0:16}"
-  local days_disp="" urgency="text"
-  if [[ -z "${deadline}" ]]; then
-    days_disp="—"
-  else
-    local d
-    d="$(core_days_between "${deadline:0:10}" "$(core_today)")"
-    if (( d < 0 )); then
-      days_disp="已截止 $((-d)) 天"; urgency="danger"
-    elif (( d == 0 )); then
-      days_disp="今天截止"; urgency="danger"
-    elif (( d <= 3 )); then
-      days_disp="剩 ${d} 天"; urgency="warning"
-    else
-      days_disp="剩 ${d} 天"
-    fi
-  fi
-
-  local status_color="text"
-  case "${status}" in
-    未提交) status_color="danger" ;;
-    已提交) status_color="success" ;;
-    已驳回) status_color="warning" ;;
-    已批改) status_color="muted" ;;
-  esac
+  local line="${_ASSIGNMENTS_ROWS[$i]:-}"
+  [[ -z "${line}" ]] && return 0
+  local deadline_disp days_disp course title status color raw
+  IFS=$'\x1f' read -r deadline_disp days_disp course title status <<< "${line}"
+  color="${_ASSIGNMENTS_COLORS[$i]:-text}"
 
   local title_w=$((UI_COLS - 58))
   if (( title_w < 8 )); then title_w=8; fi
 
-  local raw
   raw="$(printf '%s %s %s %s %s' \
     "$(core_fit "${deadline_disp}" 16)" \
     "$(core_fit "${days_disp}" 11)" \
@@ -122,12 +141,7 @@ _assignments_render_row() {
   if [[ "${i}" -eq "${ASSIGNMENTS_SEL}" ]]; then
     printf ' %s%s%s\n' "${UI_HL}" "$(core_fit "${raw}" "$((UI_COLS - 4))")" "${UI_RESET}"
   else
-    printf '  %s %s %s %s %s\n' \
-      "$(ui_paint "${urgency}" "$(core_fit "${deadline_disp}" 16)")" \
-      "$(ui_paint "${urgency}" "$(core_fit "${days_disp}" 11)")" \
-      "$(ui_paint text "$(core_fit "${course}" 16)")" \
-      "$(ui_paint text "$(core_fit "${title}" "${title_w}")")" \
-      "$(ui_paint "${status_color}" "${status}")"
+    printf '  %s\n' "$(ui_paint "${color}" "${raw}")"
   fi
 }
 
@@ -150,6 +164,16 @@ _assignments_render_list() {
   if (( total == 0 )); then
     printf '\n %s\n' "$(ui_paint muted '  暂无作业')"
     return 0
+  fi
+
+  # 每帧两次 readarray 纯 bash 读入，渲染循环内不再有任何 jq。
+  _ASSIGNMENTS_ROWS=()
+  _ASSIGNMENTS_COLORS=()
+  if [[ -n "${ASSIGNMENTS_ROWS}" ]]; then
+    readarray -t _ASSIGNMENTS_ROWS <<< "${ASSIGNMENTS_ROWS}"
+  fi
+  if [[ -n "${ASSIGNMENTS_COLORS}" ]]; then
+    readarray -t _ASSIGNMENTS_COLORS <<< "${ASSIGNMENTS_COLORS}"
   fi
 
   local visible=$((UI_ROWS - 8))
@@ -175,7 +199,9 @@ render_assignments() {
     return 0
   fi
   if _assignments_stale; then
+    printf ' %s\n' "$(ui_paint muted '  正在加载…')"
     assignments_fetch
+    ui_erase_prev_line
   fi
   _assignments_render_list
 }

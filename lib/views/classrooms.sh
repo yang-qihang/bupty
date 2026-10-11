@@ -11,69 +11,106 @@ CLASSROOMS_CAMPUS=0      # 当前校区索引（0/1）。
 CLASSROOMS_BUILDING=""   # 当前楼筛选，"" 表示全部。
 CLASSROOMS_SEL=0         # 房间列表选中行。
 CLASSROOMS_OFFSET=0      # 房间列表滚动偏移。
+CLASSROOMS_CAMPUS0_ROWS=""  # 预计算校区 0 房间行（TSV：building、room、size、slot_text）。
+CLASSROOMS_CAMPUS1_ROWS=""  # 预计算校区 1 房间行。
+CLASSROOMS_CAMPUS0_BUILDINGS=""  # 预计算校区 0 楼名（每行一个，升序去重）。
+CLASSROOMS_CAMPUS1_BUILDINGS=""  # 预计算校区 1 楼名。
 
 # 是否需要（重新）加载：尚未加载，或账号已切换。
 _classrooms_stale() {
   [[ "${CLASSROOMS_LOADED}" != "1" || "${CLASSROOMS_ACCOUNT}" != "${BUPTY_ACCOUNT}" ]]
 }
 
-# 当前校区对象（JSON）。
-_classrooms_campus() {
-  printf '%s' "${CLASSROOMS_DATA}" | jq -c --argjson i "${CLASSROOMS_CAMPUS}" '.campuses[$i] // {}' 2>/dev/null || true
+# 预计算两个校区的房间行与楼名（拉取成功后调用）。
+_classrooms_precompute() {
+  CLASSROOMS_CAMPUS0_ROWS=""
+  CLASSROOMS_CAMPUS1_ROWS=""
+  CLASSROOMS_CAMPUS0_BUILDINGS=""
+  CLASSROOMS_CAMPUS1_BUILDINGS=""
+  if [[ -z "${CLASSROOMS_DATA}" ]]; then
+    return 0
+  fi
+  local i rows buildings
+  for i in 0 1; do
+    rows="$(printf '%s' "${CLASSROOMS_DATA}" | jq -r --argjson i "${i}" '
+      def compact:
+        if length == 0 then "满"
+        else
+          (map(. + 1)) as $slots
+          | {out: "", start: $slots[0], prev: $slots[0]}
+          | reduce $slots[1:][] as $s (.;
+              if $s == .prev + 1 then .prev = $s
+              else
+                (if .start == .prev then .out += (.start | tostring) + ","
+                 else .out += (.start | tostring) + "-" + (.prev | tostring) + "," end)
+                | .start = $s | .prev = $s
+              end)
+          | (if .start == .prev then .out += (.start | tostring)
+             else .out += (.start | tostring) + "-" + (.prev | tostring) end)
+          | .out
+        end;
+      (.campuses[$i].rooms // []) as $rooms
+      | $rooms[]
+      | (.building // "") as $building
+      | (.room // "") as $room
+      | (.size // "") as $size
+      | (.available_slots // []) as $slots
+      | [ ($building | gsub("[\t\r\n]"; " ")),
+          ($room | gsub("[\t\r\n]"; " ")),
+          ($size | tostring),
+          ($slots | compact) ]
+      | join("\u001f")
+    ' 2>/dev/null || true)"
+    buildings="$(printf '%s' "${CLASSROOMS_DATA}" | jq -r --argjson i "${i}" \
+      '[.campuses[$i].rooms[]?.building] | unique | .[]' 2>/dev/null || true)"
+    if (( i == 0 )); then
+      CLASSROOMS_CAMPUS0_ROWS="${rows}"
+      CLASSROOMS_CAMPUS0_BUILDINGS="${buildings}"
+    else
+      CLASSROOMS_CAMPUS1_ROWS="${rows}"
+      CLASSROOMS_CAMPUS1_BUILDINGS="${buildings}"
+    fi
+  done
 }
 
-# 当前校区出现过的楼名（每行一个，升序去重）。
-_classrooms_buildings() {
-  local campus
-  campus="$(_classrooms_campus)"
-  printf '%s' "${campus}" | jq -r '[.rooms[]?.building] | unique | .[]' 2>/dev/null || true
-}
-
-# 当前校区 + 楼筛选后的房间数组（JSON）。
-_classrooms_rooms() {
-  local campus
-  campus="$(_classrooms_campus)"
-  if [[ -z "${CLASSROOMS_BUILDING}" ]]; then
-    printf '%s' "${campus}" | jq -c '.rooms // []' 2>/dev/null || true
+# 当前校区 + 楼筛选后的房间行（纯 bash 过滤），输出到 _CLASSROOMS_ROWS 并设置 _CLASSROOMS_COUNT。
+_classrooms_filtered() {
+  _CLASSROOMS_ROWS=()
+  _CLASSROOMS_COUNT=0
+  local src
+  if (( CLASSROOMS_CAMPUS == 0 )); then
+    src="${CLASSROOMS_CAMPUS0_ROWS}"
   else
-    printf '%s' "${campus}" | jq -c --arg b "${CLASSROOMS_BUILDING}" '[.rooms[]? | select(.building == $b)]' 2>/dev/null || true
+    src="${CLASSROOMS_CAMPUS1_ROWS}"
+  fi
+  if [[ -z "${src}" ]]; then
+    return 0
+  fi
+  local -a all=()
+  readarray -t all <<< "${src}"
+  local i building
+  for ((i = 0; i < ${#all[@]}; i++)); do
+    IFS=$'\x1f' read -r building _ <<< "${all[$i]}"
+    if [[ -z "${CLASSROOMS_BUILDING}" || "${building}" == "${CLASSROOMS_BUILDING}" ]]; then
+      _CLASSROOMS_ROWS+=("${all[$i]}")
+    fi
+  done
+  _CLASSROOMS_COUNT="${#_CLASSROOMS_ROWS[@]}"
+}
+
+# 当前校区楼名（每行一个）。
+_classrooms_buildings() {
+  if (( CLASSROOMS_CAMPUS == 0 )); then
+    printf '%s' "${CLASSROOMS_CAMPUS0_BUILDINGS}"
+  else
+    printf '%s' "${CLASSROOMS_CAMPUS1_BUILDINGS}"
   fi
 }
 
 # 房间条数。
 _classrooms_count() {
-  local rooms n
-  rooms="$(_classrooms_rooms)"
-  n="$(printf '%s' "${rooms}" | jq -r 'if type == "array" then (length | tostring) else "0" end' 2>/dev/null || true)"
-  if [[ -z "${n}" || "${n}" == "null" ]]; then
-    printf '0'
-  else
-    printf '%s' "${n}"
-  fi
-}
-
-# 把 0-based 节次 JSON 数组转为 1-based 紧凑文本（如 "1,2,3"、"1-3"），无节次输出 "满"。
-_classrooms_slot_text() {
-  local arr="$1"
-  local -a slots=()
-  local s
-  while IFS= read -r s; do slots+=("$((10#$s + 1))"); done < <(printf '%s' "${arr}" | jq -r '.[] | tostring' 2>/dev/null || true)
-  if [[ ${#slots[@]} -eq 0 ]]; then
-    printf '满'
-    return 0
-  fi
-  local out="" start prev i
-  start="${slots[0]}"; prev="${slots[0]}"
-  for ((i = 1; i < ${#slots[@]}; i++)); do
-    if (( slots[i] == prev + 1 )); then
-      prev="${slots[i]}"
-    else
-      if (( start == prev )); then out+="${start},"; else out+="${start}-${prev},"; fi
-      start="${slots[i]}"; prev="${slots[i]}"
-    fi
-  done
-  if (( start == prev )); then out+="${start}"; else out+="${start}-${prev}"; fi
-  printf '%s' "${out}"
+  _classrooms_filtered
+  printf '%s' "${_CLASSROOMS_COUNT}"
 }
 
 # 拉取并缓存（不渲染）。成功 0，失败置 BUPTY_ERR 且保留旧数据。
@@ -81,6 +118,10 @@ classrooms_fetch() {
   # 账号切换时先清空旧账号数据，避免跨账号残留泄漏。
   if [[ "${CLASSROOMS_ACCOUNT}" != "${BUPTY_ACCOUNT}" ]]; then
     CLASSROOMS_DATA=""
+    CLASSROOMS_CAMPUS0_ROWS=""
+    CLASSROOMS_CAMPUS1_ROWS=""
+    CLASSROOMS_CAMPUS0_BUILDINGS=""
+    CLASSROOMS_CAMPUS1_BUILDINGS=""
     CLASSROOMS_CAMPUS=0
     CLASSROOMS_BUILDING=""
     CLASSROOMS_SEL=0
@@ -98,6 +139,7 @@ classrooms_fetch() {
     CLASSROOMS_BUILDING=""
     CLASSROOMS_SEL=0
     CLASSROOMS_OFFSET=0
+    _classrooms_precompute
     return 0
   fi
   rm -f "${tmp}"
@@ -125,14 +167,10 @@ classrooms_refresh() {
 # 渲染单行：楼 房间 [容量N] 空节次：…（选中行高亮）。
 _classrooms_render_row() {
   local i="$1"
-  local row building room size slots slot_text
-  row="$(printf '%s' "$(_classrooms_rooms)" | jq -c '.['"${i}"']' 2>/dev/null || true)"
-  [[ -z "${row}" || "${row}" == "null" ]] && return 0
-  building="$(printf '%s' "${row}" | jq -r '.building // ""' 2>/dev/null || true)"
-  room="$(printf '%s' "${row}" | jq -r '.room // ""' 2>/dev/null || true)"
-  size="$(printf '%s' "${row}" | jq -r '.size // empty' 2>/dev/null || true)"
-  slots="$(printf '%s' "${row}" | jq -c '.available_slots // []' 2>/dev/null || true)"
-  slot_text="$(_classrooms_slot_text "${slots}")"
+  local row="${_CLASSROOMS_ROWS[$i]:-}"
+  [[ -z "${row}" ]] && return 0
+  local building room size slot_text
+  IFS=$'\x1f' read -r building room size slot_text <<< "${row}"
 
   local cap="" line
   if [[ -n "${size}" && "${size}" != "null" ]]; then
@@ -182,9 +220,9 @@ _classrooms_render_building_bar() {
 
 # 房间列表主体（含信息行与滚动）。
 _classrooms_render_list() {
-  local total rooms
-  total="$(_classrooms_count)"
-  rooms="$(_classrooms_rooms)"
+  # 在当前 shell 直接过滤（不能用 $(...) 包一层，否则会丢 _CLASSROOMS_ROWS）。
+  _classrooms_filtered
+  local total="${_CLASSROOMS_COUNT}"
 
   if (( total == 0 )); then
     printf '\n %s\n' "$(ui_paint muted '  当前筛选下暂无空教室。')"
@@ -223,7 +261,8 @@ _classrooms_render_content() {
   target_date="$(printf '%s' "${CLASSROOMS_DATA}" | jq -r '.target_date // ""' 2>/dev/null || true)"
   campus_name="$(printf '%s' "${CLASSROOMS_DATA}" | jq -r --argjson i "${CLASSROOMS_CAMPUS}" '.campuses[$i].campus_name // ""' 2>/dev/null || true)"
   building_disp="${CLASSROOMS_BUILDING:-全部}"
-  total="$(_classrooms_count)"
+  _classrooms_filtered
+  total="${_CLASSROOMS_COUNT}"
 
   printf ' %s\n' "$(ui_paint muted "空教室 · ${target_date} · 校区 ${campus_name} · 楼 ${building_disp} · 共 ${total} 间 · ←→ 切校区 · f 切楼 · ↑↓ 选择 · r 刷新")"
   printf '\n'
@@ -238,7 +277,9 @@ render_classrooms() {
     return 0
   fi
   if _classrooms_stale; then
+    printf ' %s\n' "$(ui_paint muted '  正在加载…')"
     classrooms_fetch
+    ui_erase_prev_line
   fi
   _classrooms_render_content
 }

@@ -2,6 +2,11 @@
 # bin/bupty —— bupty 入口。定位安装目录、加载库并进入 TUI。
 set -euo pipefail
 
+# 确保 UTF-8 locale：C/POSIX locale 下中文宽度会按字节计导致界面错位。
+case "${LC_ALL:-${LC_CTYPE:-${LANG:-C}}}" in
+  C|POSIX|C.*|POSIX.*) export LC_ALL=C.UTF-8 ;;
+esac
+
 # 定位仓库根（bin/ 的上一级）。
 _BUPTY_BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUPTY_HOME="$(cd "${_BUPTY_BIN_DIR}/.." && pwd)"

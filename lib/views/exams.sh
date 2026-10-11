@@ -9,26 +9,49 @@ EXAMS_ACCOUNT=""   # 数据所属账号。
 EXAMS_LOADED=0     # 是否已为当前账号加载过（含失败）。
 EXAMS_SEL=0        # 列表选中行。
 EXAMS_OFFSET=0     # 列表滚动偏移。
+EXAMS_ROWS=""      # 预计算考试显示行（每行一个完整文本行）。
+EXAMS_COUNT=0      # 预计算条数。
 
 # 是否需要（重新）加载：尚未加载，或账号已切换。
 _exams_stale() {
   [[ "${EXAMS_LOADED}" != "1" || "${EXAMS_ACCOUNT}" != "${BUPTY_ACCOUNT}" ]]
 }
 
-# 考试条目数组（按 date/start_time 升序）。输出 JSON 数组。
-_exams_items() {
-  printf '%s' "${EXAMS_DATA}" | jq -c '[.items[]?] | sort_by(.date, .start_time)' 2>/dev/null || true
-}
-
 # 考试条目数。
 _exams_count() {
-  local arr n
-  arr="$(_exams_items)"
-  n="$(printf '%s' "${arr}" | jq -r 'if type == "array" then (length | tostring) else "0" end' 2>/dev/null || true)"
-  if [[ -z "${n}" || "${n}" == "null" ]]; then
+  if [[ -z "${EXAMS_DATA}" ]]; then
     printf '0'
   else
-    printf '%s' "${n}"
+    printf '%s' "${EXAMS_COUNT:-0}"
+  fi
+}
+
+# 预计算考试显示行（拉取成功后一次 jq，按 date/start_time 升序）。
+_exams_precompute() {
+  EXAMS_ROWS=""
+  EXAMS_COUNT=0
+  if [[ -z "${EXAMS_DATA}" ]]; then
+    return 0
+  fi
+  EXAMS_ROWS="$(printf '%s' "${EXAMS_DATA}" | jq -r '
+    [.items[]?] | sort_by(.date, .start_time)
+    | .[]
+    | (.date // "") as $date
+    | (.start_time // "") as $start
+    | (.end_time // "") as $end
+    | (.name // "") as $name
+    | (.room // "") as $room
+    | (.time_text // "") as $time_text
+    | (if ($date != "" and $start != "") then
+         ($date + " " + $start + "-" + $end + " " + $name + (if $room != "" then " @" + $room else "" end))
+       else
+         ("时间待定 " + $name + (if $time_text != "" then " · " + $time_text else "" end))
+       end)
+    | gsub("[\t\r\n]"; " ")
+  ' 2>/dev/null || true)"
+  if [[ -n "${EXAMS_ROWS}" ]]; then
+    EXAMS_COUNT="$(wc -l <<< "${EXAMS_ROWS}" 2>/dev/null || echo 0)"
+    EXAMS_COUNT="${EXAMS_COUNT//[^0-9]/}"
   fi
 }
 
@@ -37,6 +60,8 @@ exams_fetch() {
   # 账号切换时先清空旧账号数据，避免跨账号残留泄漏。
   if [[ "${EXAMS_ACCOUNT}" != "${BUPTY_ACCOUNT}" ]]; then
     EXAMS_DATA=""
+    EXAMS_ROWS=""
+    EXAMS_COUNT=0
     EXAMS_SEL=0
     EXAMS_OFFSET=0
   fi
@@ -70,6 +95,7 @@ exams_fetch() {
   EXAMS_ACCOUNT="${BUPTY_ACCOUNT}"
   EXAMS_SEL=0
   EXAMS_OFFSET=0
+  _exams_precompute
   return 0
 }
 
@@ -92,23 +118,8 @@ exams_refresh() {
 # 渲染单行：日期 HH:MM-HH:MM 课程 @考场；时间待定时显示「时间待定」+ 原始 time_text。
 _exams_render_row() {
   local i="$1"
-  local row date start_time end_time name room time_text line
-  row="$(printf '%s' "$(_exams_items)" | jq -c '.['"${i}"']' 2>/dev/null || true)"
-  [[ -z "${row}" || "${row}" == "null" ]] && return 0
-  date="$(printf '%s' "${row}" | jq -r '.date // ""' 2>/dev/null || true)"
-  start_time="$(printf '%s' "${row}" | jq -r '.start_time // ""' 2>/dev/null || true)"
-  end_time="$(printf '%s' "${row}" | jq -r '.end_time // ""' 2>/dev/null || true)"
-  name="$(printf '%s' "${row}" | jq -r '.name // ""' 2>/dev/null || true)"
-  room="$(printf '%s' "${row}" | jq -r '.room // ""' 2>/dev/null || true)"
-  time_text="$(printf '%s' "${row}" | jq -r '.time_text // ""' 2>/dev/null || true)"
-
-  if [[ -n "${date}" && -n "${start_time}" ]]; then
-    line="${date} ${start_time}-${end_time} ${name}"
-    if [[ -n "${room}" ]]; then line+=" @${room}"; fi
-  else
-    line="时间待定 ${name}"
-    if [[ -n "${time_text}" ]]; then line+=" · ${time_text}"; fi
-  fi
+  local line="${_EXAMS_ROWS[$i]:-}"
+  [[ -z "${line}" ]] && return 0
 
   if [[ "${i}" -eq "${EXAMS_SEL}" ]]; then
     printf ' %s\n' "$(ui_paint hl "› $(core_fit "${line}" "$((UI_COLS - 4))")")"
@@ -140,6 +151,12 @@ _exams_render_content() {
     return 0
   fi
 
+  # 纯 bash 读入预计算行，渲染循环内不再有任何 jq。
+  _EXAMS_ROWS=()
+  if [[ -n "${EXAMS_ROWS}" ]]; then
+    readarray -t _EXAMS_ROWS <<< "${EXAMS_ROWS}"
+  fi
+
   local visible=$((UI_ROWS - 8))
   if (( visible < 4 )); then visible=4; fi
   if (( EXAMS_SEL >= total )); then EXAMS_SEL=$((total - 1)); fi
@@ -163,7 +180,9 @@ render_exams() {
     return 0
   fi
   if _exams_stale; then
+    printf ' %s\n' "$(ui_paint muted '  正在加载…')"
     exams_fetch
+    ui_erase_prev_line
   fi
   _exams_render_content
 }

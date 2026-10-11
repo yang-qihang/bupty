@@ -323,7 +323,7 @@ _public_parse_contest() {
     return 1
   fi
 
-  local raw out="" line pd
+  local raw out="" line pd ts
   raw="$(printf '%s' "${body}" | jq -c '
     [.items[]?
       | select((.archived != true))
@@ -357,11 +357,12 @@ _public_parse_contest() {
     pd="$(printf '%s' "${line}" | jq -r '.primary_deadline // empty' 2>/dev/null || true)"
     if core_is_blank "${pd}"; then continue; fi
     if ! _public_valid_rfc3339 "${pd}"; then continue; fi
-    out+="${line}"$'\n'
+    ts="$(TZ=Asia/Shanghai date -d "${pd}" +%s 2>/dev/null || echo 0)"
+    out+="$(printf '%s' "${line}" | jq -c --argjson ts "${ts}" '. + {deadline_ts: $ts}' 2>/dev/null || true)"$'\n'
   done < <(printf '%s' "${raw}" | jq -c '.[]' 2>/dev/null)
 
   local items_json
-  items_json="$(printf '%s' "${out}" | jq -s -c '.' 2>/dev/null || true)"
+  items_json="$(printf '%s' "${out}" | jq -s -c 'sort_by(.deadline_ts, .name)' 2>/dev/null || true)"
   [[ -n "${items_json}" ]] || items_json="[]"
   # items 可能很大，须经 stdin 传入，避免超出 argv 上限。
   printf '%s' "${items_json}" | jq -c --arg g "${generated_at}" '{generated_at:$g, items:.}'
@@ -378,7 +379,7 @@ _public_parse_notices() {
   fi
   src_name="$(printf '%s' "${body}" | jq -r '.source.name // ""' 2>/dev/null || true)"
 
-  local out="" line id name org deadlines has_dl pd pd_label idx d dd dl
+  local out="" line id name org deadlines has_dl pd pd_label idx d dd dl ts
   while IFS= read -r line; do
     [[ -z "${line}" ]] && continue
     id="$(printf '%s' "${line}" | jq -r '.id // empty' 2>/dev/null || true)"
@@ -418,16 +419,17 @@ _public_parse_notices() {
       fi
       dl="$(core_trim "${dl}")"
       [[ -n "${dl}" ]] || dl="截止时间"
+      ts="$(TZ=Asia/Shanghai date -d "${dd}" +%s 2>/dev/null || echo 0)"
       out+="$(jq -n --arg id "school:${id}:${idx}" --arg name "${name}" --arg pd "${dd}" \
-        --arg dl "${dl}" --arg org "${org}" \
+        --arg dl "${dl}" --arg org "${org}" --argjson ts "${ts}" \
         '{id:$id, name:$name, event_type:"competition", source_type:"school_notice",
           primary_deadline:$pd, deadline_label:$dl, organizer:$org,
-          categories:["校内竞赛通知"], tags:[], level:"", location:""}' 2>/dev/null || true)"$'\n'
+          categories:["校内竞赛通知"], tags:[], level:"", location:"", deadline_ts:$ts}' 2>/dev/null || true)"$'\n'
       idx=$((idx + 1))
     done < <(printf '%s' "${deadlines}" | jq -c '.[]' 2>/dev/null)
   done < <(printf '%s' "${body}" | jq -c '.items[]? // empty' 2>/dev/null)
 
-  printf '%s' "${out}" | jq -s -c 'sort_by(.primary_deadline, .name)' 2>/dev/null || true
+  printf '%s' "${out}" | jq -s -c 'sort_by(.deadline_ts, .name)' 2>/dev/null || true
 }
 
 # 拉取活动 / 竞赛 DDL（协议 3.2）。主/镜像按 generated_at 择新，均失败用备用；再合并校内通知。
@@ -497,7 +499,7 @@ public_fetch_events() {
     if [[ "${school_ok}" == "1" ]]; then
       source="${chosen_url} + ${PUBLIC_NOTICES_URL}"
       items="$(printf '%s' "${items}" | jq -c --argjson s "${school_items}" \
-        '. + $s | sort_by(.primary_deadline, .name)' 2>/dev/null || true)"
+        '. + $s | sort_by(.deadline_ts, .name)' 2>/dev/null || true)"
     else
       source="${chosen_url}"
     fi

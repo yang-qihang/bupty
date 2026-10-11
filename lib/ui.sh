@@ -89,6 +89,13 @@ ui_clear() {
   printf '\033[2J\033[H'
 }
 
+# 上移一行并清除（仅 TTY，避免污染管道/快照输出）。
+ui_erase_prev_line() {
+  if [[ -t 1 ]]; then
+    printf '\033[1A\033[2K'
+  fi
+}
+
 ui_hide_cursor() { printf '\033[?25l'; }
 ui_show_cursor() { printf '\033[?25h'; }
 
@@ -179,14 +186,11 @@ ui_box_row() {
   printf '%s\n' "${UI_RESET}"
 }
 
-# 显示宽度（中文 2 列）。
+# 显示宽度（中文 2 列）。纯 bash，无 fork。
 core_fit_width() {
-  local s="${1:-}" w=0 i ch
-  for ((i = 0; i < ${#s}; i++)); do
-    ch="${s:i:1}"
-    if [[ "$(printf '%d' "'${ch}")" -gt 255 ]]; then w=$((w + 2)); else w=$((w + 1)); fi
-  done
-  printf '%s' "${w}"
+  local s="${1:-}"
+  _core_width "${s}"
+  printf '%s' "${_CORE_W}"
 }
 
 # 居中文本到指定宽度。

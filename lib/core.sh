@@ -123,40 +123,38 @@ core_is_blank() {
   [[ -z "${1:-}" || -z "$(core_trim "${1:-}")" ]]
 }
 
+# 计算显示宽度：码点 > 255（CJK/全角等）计 2 列，其余（ASCII/Latin-1）计 1 列。
+# 用 printf -v（内建，无 fork/子 shell）取码点。
+_core_width() {
+  local s="${1:-}" w=0 i ch cp
+  for ((i = 0; i < ${#s}; i++)); do
+    ch="${s:i:1}"
+    printf -v cp '%d' "'${ch}"
+    if (( cp > 255 )); then w=$((w + 2)); else w=$((w + 1)); fi
+  done
+  _CORE_W=$w
+}
+
 # 截断显示宽度（中文按 2 列计）。参数：<文本> <最大宽度>
 core_pad() {
   local s="${1:-}" width="${2:-0}"
-  local w=0 i ch
-  for ((i = 0; i < ${#s}; i++)); do
-    ch="${s:i:1}"
-    if [[ "$(printf '%d' "'${ch}")" -gt 255 ]]; then
-      w=$((w + 2))
-    else
-      w=$((w + 1))
-    fi
-  done
-  printf '%*s' "$((width > w ? width - w : 0))" ''
+  (( width < 0 )) && width=0
+  _core_width "${s}"
+  printf '%*s' "$((width > _CORE_W ? width - _CORE_W : 0))" ''
 }
 
 # 按显示宽度截断文本并补空格到指定宽度（中文按 2 列）。
 core_fit() {
   local s="${1:-}" width="${2:-0}"
-  local out="" w=0 i ch cw
-  for ((i = 0; i < ${#s}; i++)); do
-    ch="${s:i:1}"
-    if [[ "$(printf '%d' "'${ch}")" -gt 255 ]]; then
-      cw=2
-    else
-      cw=1
-    fi
-    if ((w + cw > width)); then
-      break
-    fi
-    out+="${ch}"
-    w=$((w + cw))
+  (( width < 0 )) && width=0
+  _core_width "${s}"
+  # 超宽时从尾部逐字符裁剪（罕见路径）。
+  while (( _CORE_W > width )); do
+    s="${s%?}"
+    _core_width "${s}"
   done
-  printf '%s' "${out}"
-  printf '%s' "$(core_pad "${out}" "${width}")"
+  printf '%s' "${s}"
+  printf '%*s' "$((width - _CORE_W))" ''
 }
 
 # 判断是否为 UTF-8 终端（决定是否用 Unicode 盒子字符）。

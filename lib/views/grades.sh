@@ -12,6 +12,8 @@ GRADES_ACCOUNT=""       # 数据所属账号。
 GRADES_LOADED=0         # 是否已为当前账号加载过（含失败）。
 GRADES_SEL=0            # 成绩列表选中行。
 GRADES_OFFSET=0         # 成绩列表滚动偏移。
+GRADES_ROWS=""          # 预计算成绩显示行（每行一个完整文本行）。
+GRADES_COUNT=0          # 预计算条数。
 
 # 是否需要（重新）加载：尚未加载，或账号已切换。
 _grades_stale() {
@@ -42,19 +44,38 @@ _grades_record_type_name() {
   esac
 }
 
-# 成绩条目数组（JSON）。
-_grades_items() {
-  printf '%s' "${GRADES_DATA}" | jq -c '.items // []' 2>/dev/null || true
-}
-
 # 成绩条目数。
 _grades_count() {
-  local n
-  n="$(printf '%s' "${GRADES_DATA}" | jq -r 'if (.items | type) == "array" then (.items | length | tostring) else "0" end' 2>/dev/null || true)"
-  if [[ -z "${n}" || "${n}" == "null" ]]; then
+  if [[ -z "${GRADES_DATA}" ]]; then
     printf '0'
   else
-    printf '%s' "${n}"
+    printf '%s' "${GRADES_COUNT:-0}"
+  fi
+}
+
+# 预计算成绩显示行（拉取成绩报告成功后一次 jq）。
+_grades_precompute() {
+  GRADES_ROWS=""
+  GRADES_COUNT=0
+  if [[ -z "${GRADES_DATA}" ]]; then
+    return 0
+  fi
+  GRADES_ROWS="$(printf '%s' "${GRADES_DATA}" | jq -r '
+    .items // [] | .[]
+    | (.name // "") as $name
+    | (.credits // "") as $credits
+    | (.score // "") as $score
+    | (.course_nature // "") as $nature
+    | (.grade_status // "") as $status
+    | (($name | gsub("[\t\r\n]"; " "))
+       + (if ($credits == "") then "" else " [学分" + ($credits | tostring) + "]" end)
+       + (if ($score == "") then "" else " " + ($score | tostring) end)
+       + (if ($nature == "") then "" else " · " + ($nature | gsub("[\t\r\n]"; " ")) end)
+       + (if ($status == "") then "" else " · " + ($status | gsub("[\t\r\n]"; " ")) end))
+  ' 2>/dev/null || true)"
+  if [[ -n "${GRADES_ROWS}" ]]; then
+    GRADES_COUNT="$(wc -l <<< "${GRADES_ROWS}" 2>/dev/null || echo 0)"
+    GRADES_COUNT="${GRADES_COUNT//[^0-9]/}"
   fi
 }
 
@@ -91,6 +112,7 @@ grades_fetch_report() {
     rm -f "${tmp}"
     GRADES_SEL=0
     GRADES_OFFSET=0
+    _grades_precompute
     return 0
   fi
   rm -f "${tmp}"
@@ -103,6 +125,8 @@ grades_fetch() {
   if [[ "${GRADES_ACCOUNT}" != "${BUPTY_ACCOUNT}" ]]; then
     GRADES_TERMS=""
     GRADES_DATA=""
+    GRADES_ROWS=""
+    GRADES_COUNT=0
     GRADES_SEL_TERM=0
     GRADES_SEL=0
     GRADES_OFFSET=0
@@ -147,20 +171,8 @@ grades_refresh() {
 # 渲染单行：课程名 [学分X] 成绩 · 性质 · 状态（选中行高亮）。
 _grades_render_row() {
   local i="$1"
-  local row name credits score nature status line
-  row="$(printf '%s' "$(_grades_items)" | jq -c '.['"${i}"']' 2>/dev/null || true)"
-  [[ -z "${row}" || "${row}" == "null" ]] && return 0
-  name="$(printf '%s' "${row}" | jq -r '.name // ""' 2>/dev/null || true)"
-  credits="$(printf '%s' "${row}" | jq -r '.credits // ""' 2>/dev/null || true)"
-  score="$(printf '%s' "${row}" | jq -r '.score // ""' 2>/dev/null || true)"
-  nature="$(printf '%s' "${row}" | jq -r '.course_nature // ""' 2>/dev/null || true)"
-  status="$(printf '%s' "${row}" | jq -r '.grade_status // ""' 2>/dev/null || true)"
-
-  line="${name}"
-  [[ -n "${credits}" ]] && line+=" [学分${credits}]"
-  [[ -n "${score}" ]] && line+=" ${score}"
-  [[ -n "${nature}" ]] && line+=" · ${nature}"
-  [[ -n "${status}" ]] && line+=" · ${status}"
+  local line="${_GRADES_ROWS[$i]:-}"
+  [[ -z "${line}" ]] && return 0
 
   if [[ "${i}" -eq "${GRADES_SEL}" ]]; then
     printf ' %s\n' "$(ui_paint hl "› $(core_fit "${line}" "$((UI_COLS - 4))")")"
@@ -195,6 +207,12 @@ _grades_render_content() {
     return 0
   fi
 
+  # 纯 bash 读入预计算行，渲染循环内不再有任何 jq。
+  _GRADES_ROWS=()
+  if [[ -n "${GRADES_ROWS}" ]]; then
+    readarray -t _GRADES_ROWS <<< "${GRADES_ROWS}"
+  fi
+
   local visible=$((UI_ROWS - 8))
   if (( visible < 4 )); then visible=4; fi
   if (( GRADES_SEL >= total )); then GRADES_SEL=$((total - 1)); fi
@@ -218,7 +236,9 @@ render_grades() {
     return 0
   fi
   if _grades_stale; then
+    printf ' %s\n' "$(ui_paint muted '  正在加载…')"
     grades_fetch
+    ui_erase_prev_line
   fi
   _grades_render_content
 }

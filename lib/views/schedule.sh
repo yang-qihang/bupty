@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# views/schedule.sh —— 课表视图：学期信息、节次网格（周一到周日）、今天课程列表与滚动选择。
+# views/schedule.sh —— 课表视图：学期信息、节次网格（周一到周日）、按星期查看课程列表与滚动选择。
 
 set -euo pipefail
 
@@ -7,8 +7,18 @@ set -euo pipefail
 SCHEDULE_DATA=""      # 课表 JSON 对象（{term_id, term_start_date, current_week, courses:[]}）。
 SCHEDULE_ACCOUNT=""   # 数据所属账号。
 SCHEDULE_LOADED=0     # 是否已为当前账号加载过（含失败）。
-SCHEDULE_SEL=0        # 今天课程列表选中行。
-SCHEDULE_OFFSET=0     # 今天课程列表滚动偏移。
+SCHEDULE_SEL=0        # 课程列表选中行。
+SCHEDULE_OFFSET=0     # 课程列表滚动偏移。
+SCHEDULE_DAY=""       # 查看的星期几（1=周一..7=周日，空=今天）。
+SCHEDULE_CELL_TSV=""  # 网格预计算（weekday\tstart_slot\tname，按 courses 顺序逐节展开）。
+SCHEDULE_DAY_ROWS=""  # 当前查看日的课程显示行（TSV：time_range、name、room、week_text）。
+SCHEDULE_DAY_COUNT=0  # 当前查看日的课程条数。
+SCHEDULE_TERM_ID=""
+SCHEDULE_TERM_START=""
+SCHEDULE_CURRENT_WEEK="0"
+SCHEDULE_MIN_SLOT=""
+SCHEDULE_MAX_SLOT=""
+declare -A SCHEDULE_CELL_MAP=()  # 网格单元格映射（"day-slot" → 课程名），渲染时重建。
 
 # 是否需要（重新）加载：尚未加载，或账号已切换。
 _schedule_stale() {
@@ -20,31 +30,88 @@ _schedule_today() {
   core_weekday "$(core_today)"
 }
 
-# 今天的课程数组（按 start_slot、name 升序）。输出 JSON 数组。
-_schedule_today_courses() {
-  local d
-  d="$(_schedule_today)"
-  printf '%s' "${SCHEDULE_DATA}" | jq -c --argjson d "${d}" \
-    '[.courses[]? | select(.weekday == $d)] | sort_by(.start_slot, .name)' 2>/dev/null || true
-}
-
-# 今天课程条数。
-_schedule_today_count() {
-  local arr n
-  arr="$(_schedule_today_courses)"
-  n="$(printf '%s' "${arr}" | jq -r 'if type == "array" then (length | tostring) else "0" end' 2>/dev/null || true)"
-  if [[ -z "${n}" || "${n}" == "null" ]]; then
-    printf '0'
+# 当前查看的星期几（默认今天）。
+_schedule_day() {
+  if [[ "${SCHEDULE_DAY:-}" =~ ^[1-7]$ ]]; then
+    printf '%s' "${SCHEDULE_DAY}"
   else
-    printf '%s' "${n}"
+    printf '%s' "$(_schedule_today)"
   fi
 }
 
-# 网格某单元格（某天某节）显示的课程名（多门取第一门）。
-_schedule_cell_text() {
-  local day="$1" slot="$2"
-  printf '%s' "${SCHEDULE_DATA}" | jq -r --argjson d "${day}" --argjson s "${slot}" \
-    '[.courses[]? | select(.weekday == $d and .start_slot <= $s and .end_slot >= $s)] | .[0].name // ""' 2>/dev/null || true
+# 当前查看日课程条数。
+_schedule_day_count() {
+  printf '%s' "${SCHEDULE_DAY_COUNT:-0}"
+}
+
+# 预计算网格单元格与学期元信息（拉取成功后一次 jq）。
+_schedule_precompute() {
+  SCHEDULE_CELL_TSV=""
+  SCHEDULE_TERM_ID=""
+  SCHEDULE_TERM_START=""
+  SCHEDULE_CURRENT_WEEK="0"
+  SCHEDULE_MIN_SLOT=""
+  SCHEDULE_MAX_SLOT=""
+  SCHEDULE_DAY_ROWS=""
+  SCHEDULE_DAY_COUNT=0
+  if [[ -z "${SCHEDULE_DATA}" ]]; then
+    return 0
+  fi
+
+  SCHEDULE_CELL_TSV="$(printf '%s' "${SCHEDULE_DATA}" | jq -r '
+    .courses[]?
+    | select((.weekday | type) == "number" and (.start_slot | type) == "number" and (.end_slot | type) == "number")
+    | . as $c
+    | range($c.start_slot; $c.end_slot + 1)
+    | [ $c.weekday, ., (($c.name // "") | gsub("[\t\r\n]"; " ")) ]
+    | join("\u001f")
+  ' 2>/dev/null || true)"
+
+  # 预构建网格单元格映射（"day-slot" → 课程名，多门取第一门）。
+  SCHEDULE_CELL_MAP=()
+  if [[ -n "${SCHEDULE_CELL_TSV}" ]]; then
+    local cd cslot cname
+    while IFS=$'\x1f' read -r cd cslot cname; do
+      [[ -z "${SCHEDULE_CELL_MAP["${cd}-${cslot}"]+x}" ]] && SCHEDULE_CELL_MAP["${cd}-${cslot}"]="${cname}"
+    done <<< "${SCHEDULE_CELL_TSV}"
+  fi
+
+  local meta
+  meta="$(printf '%s' "${SCHEDULE_DATA}" | jq -r '
+    [ (.term_id // ""),
+      (.term_start_date // ""),
+      ((.current_week // 0) | tostring),
+      (([.courses[]?.start_slot] | min // "") | tostring),
+      (([.courses[]?.end_slot] | max // "") | tostring) ]
+    | join("\u001f")
+  ' 2>/dev/null || true)"
+  IFS=$'\x1f' read -r SCHEDULE_TERM_ID SCHEDULE_TERM_START SCHEDULE_CURRENT_WEEK SCHEDULE_MIN_SLOT SCHEDULE_MAX_SLOT <<< "${meta}"
+
+  _schedule_precompute_day
+}
+
+# 预计算当前查看日的课程显示行（拉取成功或切换 ←/→ 后调用）。
+_schedule_precompute_day() {
+  SCHEDULE_DAY_ROWS=""
+  SCHEDULE_DAY_COUNT=0
+  if [[ -z "${SCHEDULE_DATA}" ]]; then
+    return 0
+  fi
+  local d
+  d="$(_schedule_day)"
+  SCHEDULE_DAY_ROWS="$(printf '%s' "${SCHEDULE_DATA}" | jq -r --argjson d "${d}" '
+    [.courses[]? | select(.weekday == $d)] | sort_by(.start_slot, .name)
+    | .[]
+    | [ ((.time_range // "") | gsub("[\t\r\n]"; " ")),
+        ((.name // "") | gsub("[\t\r\n]"; " ")),
+        ((.room // "") | gsub("[\t\r\n]"; " ")),
+        ((.week_text // "") | gsub("[\t\r\n]"; " ")) ]
+    | join("\u001f")
+  ' 2>/dev/null || true)"
+  if [[ -n "${SCHEDULE_DAY_ROWS}" ]]; then
+    SCHEDULE_DAY_COUNT="$(wc -l <<< "${SCHEDULE_DAY_ROWS}" 2>/dev/null || echo 0)"
+    SCHEDULE_DAY_COUNT="${SCHEDULE_DAY_COUNT//[^0-9]/}"
+  fi
 }
 
 # 拉取并缓存（不渲染）。成功 0，失败置 BUPTY_ERR 且保留旧数据。
@@ -52,6 +119,10 @@ schedule_fetch() {
   # 账号切换时先清空旧账号数据，避免跨账号残留泄漏。
   if [[ "${SCHEDULE_ACCOUNT}" != "${BUPTY_ACCOUNT}" ]]; then
     SCHEDULE_DATA=""
+    SCHEDULE_CELL_TSV=""
+    SCHEDULE_DAY_ROWS=""
+    SCHEDULE_DAY_COUNT=0
+    SCHEDULE_DAY=""
     SCHEDULE_SEL=0
     SCHEDULE_OFFSET=0
   fi
@@ -65,6 +136,7 @@ schedule_fetch() {
     SCHEDULE_LOADED=1
     SCHEDULE_SEL=0
     SCHEDULE_OFFSET=0
+    _schedule_precompute
     return 0
   fi
   rm -f "${tmp}"
@@ -95,11 +167,19 @@ _schedule_repeat() {
   for ((i = 0; i < n; i++)); do printf '%s' "${ch}"; done
 }
 
-# 节次网格：列 = 周一..周日，行 = 节次区间，今天列高亮。
+# 网格某单元格（某天某节）显示的课程名（多门取第一门），纯 bash 查找。
+_schedule_cell_text() {
+  local day="$1" slot="$2"
+  printf '%s' "${SCHEDULE_CELL_MAP["${day}-${slot}"]:-}"
+}
+
+# 节次网格：列 = 周一..周日，行 = 节次区间，选中日列高亮、今天列轻标记。
 _schedule_grid() {
   local min_slot="$1" max_slot="$2"
-  local today
+  local day_sel today
+  day_sel="$(_schedule_day)"
   today="$(_schedule_today)"
+
   local lw=6
   local cw=$(( (UI_COLS - 10 - lw) / 7 ))
   if (( cw < 4 )); then cw=4; fi
@@ -131,8 +211,10 @@ _schedule_grid() {
       6) label="周六" ;;
       7) label="周日" ;;
     esac
-    if (( d == today )); then
+    if (( d == day_sel )); then
       printf '%s' "$(ui_paint hl "$(core_fit "${label}" "${cw}")")"
+    elif (( d == today )); then
+      printf '%s' "$(ui_paint title "$(core_fit "${label}" "${cw}")")"
     else
       printf '%s' "$(ui_paint muted "$(core_fit "${label}" "${cw}")")"
     fi
@@ -159,8 +241,10 @@ _schedule_grid() {
       local cell fitted
       cell="$(_schedule_cell_text "${d}" "${s}")"
       fitted="$(core_fit "${cell}" "${cw}")"
-      if (( d == today )); then
+      if (( d == day_sel )); then
         printf '%s%s%s' "${UI_HL}" "${fitted}" "${UI_RESET}"
+      elif (( d == today )); then
+        printf '%s' "$(ui_paint title "${fitted}")"
       else
         printf '%s' "${fitted}"
       fi
@@ -180,18 +264,14 @@ _schedule_grid() {
   printf '%s\n' "${_UI_BOX_BR}"
 }
 
-# 今天课程单行。
-_schedule_today_row() {
-  local arr="$1" i="$2"
-  local row time_range name room week_text
-  row="$(printf '%s' "${arr}" | jq -c '.['"${i}"']' 2>/dev/null || true)"
-  [[ -z "${row}" || "${row}" == "null" ]] && return 0
-  time_range="$(printf '%s' "${row}" | jq -r '.time_range // ""' 2>/dev/null || true)"
-  name="$(printf '%s' "${row}" | jq -r '.name // ""' 2>/dev/null || true)"
-  room="$(printf '%s' "${row}" | jq -r '.room // ""' 2>/dev/null || true)"
-  week_text="$(printf '%s' "${row}" | jq -r '.week_text // ""' 2>/dev/null || true)"
+# 课程单行。
+_schedule_day_row() {
+  local i="$1"
+  local row="${_SCHEDULE_DAY_ROWS[$i]:-}"
+  [[ -z "${row}" ]] && return 0
+  local time_range name room week_text line
+  IFS=$'\x1f' read -r time_range name room week_text <<< "${row}"
 
-  local line
   if [[ -n "${room}" ]]; then
     line="${time_range} ${name} @${room} · ${week_text}"
   else
@@ -205,16 +285,32 @@ _schedule_today_row() {
   fi
 }
 
-# 今天课程列表（可滚动）。
-_schedule_render_today() {
-  local arr count
-  arr="$(_schedule_today_courses)"
-  count="$(_schedule_today_count)"
+# 课程列表（可滚动）。
+_schedule_render_day() {
+  local count
+  count="$(_schedule_day_count)"
 
-  printf ' %s\n' "$(ui_paint title '今天课程')"
+  local d dlabel
+  d="$(_schedule_day)"
+  case "${d}" in
+    1) dlabel="周一" ;;
+    2) dlabel="周二" ;;
+    3) dlabel="周三" ;;
+    4) dlabel="周四" ;;
+    5) dlabel="周五" ;;
+    6) dlabel="周六" ;;
+    7) dlabel="周日" ;;
+  esac
+
+  printf ' %s\n' "$(ui_paint title "${dlabel}课程")"
   if (( count == 0 )); then
-    printf ' %s\n' "$(ui_paint muted '  今天没有课')"
+    printf ' %s\n' "$(ui_paint muted "  ${dlabel}没有课")"
     return 0
+  fi
+
+  _SCHEDULE_DAY_ROWS=()
+  if [[ -n "${SCHEDULE_DAY_ROWS}" ]]; then
+    readarray -t _SCHEDULE_DAY_ROWS <<< "${SCHEDULE_DAY_ROWS}"
   fi
 
   local visible=$((UI_ROWS - 10))
@@ -229,11 +325,11 @@ _schedule_render_today() {
   if (( end > count )); then end=${count}; fi
   local i
   for ((i = offset; i < end; i++)); do
-    _schedule_today_row "${arr}" "${i}"
+    _schedule_day_row "${i}"
   done
 }
 
-# 内容渲染：信息行 + 网格 + 今天课程。
+# 内容渲染：信息行 + 网格 + 按星期课程。
 _schedule_render_content() {
   printf '\n'
   if [[ -z "${SCHEDULE_DATA}" ]]; then
@@ -245,10 +341,7 @@ _schedule_render_content() {
     return 0
   fi
 
-  local term_id term_start_date current_week
-  term_id="$(printf '%s' "${SCHEDULE_DATA}" | jq -r '.term_id // ""' 2>/dev/null || true)"
-  term_start_date="$(printf '%s' "${SCHEDULE_DATA}" | jq -r '.term_start_date // ""' 2>/dev/null || true)"
-  current_week="$(printf '%s' "${SCHEDULE_DATA}" | jq -r '.current_week // 0' 2>/dev/null || true)"
+  local term_id="${SCHEDULE_TERM_ID}" term_start_date="${SCHEDULE_TERM_START}" current_week="${SCHEDULE_CURRENT_WEEK}"
 
   local week_disp
   if (( current_week < 1 )); then
@@ -259,17 +352,14 @@ _schedule_render_content() {
   printf ' %s\n' "$(ui_paint muted "学期 ${term_id} · ${week_disp} · 开学 ${term_start_date}")"
   printf '\n'
 
-  local min_slot max_slot
-  min_slot="$(printf '%s' "${SCHEDULE_DATA}" | jq -r '[.courses[]?.start_slot] | min // empty' 2>/dev/null || true)"
-  max_slot="$(printf '%s' "${SCHEDULE_DATA}" | jq -r '[.courses[]?.end_slot] | max // empty' 2>/dev/null || true)"
-  if [[ -z "${min_slot}" || -z "${max_slot}" ]]; then
+  if [[ -z "${SCHEDULE_MIN_SLOT}" || -z "${SCHEDULE_MAX_SLOT}" ]]; then
     printf ' %s\n' "$(ui_paint muted '  本周暂无课程')"
   else
-    _schedule_grid "${min_slot}" "${max_slot}"
+    _schedule_grid "${SCHEDULE_MIN_SLOT}" "${SCHEDULE_MAX_SLOT}"
   fi
   printf '\n'
 
-  _schedule_render_today
+  _schedule_render_day
 }
 
 # 进入视图渲染。首次进入同步拉取（短暂阻塞），随后渲染网格或错误。
@@ -279,21 +369,37 @@ render_schedule() {
     return 0
   fi
   if _schedule_stale; then
+    printf ' %s\n' "$(ui_paint muted '  正在加载…')"
     schedule_fetch
+    ui_erase_prev_line
   fi
   _schedule_render_content
 }
 
-# 按键处理：↑/↓ 移动、PgUp/PgDn 翻页、r 刷新。
+# 按键处理：←/→ 切星期、↑/↓ 移动、PgUp/PgDn 翻页、r 刷新。
 handle_schedule_key() {
   local key="$1"
   local total
   case "${key}" in
+    LEFT)
+      SCHEDULE_DAY=$(( $( _schedule_day ) - 1 ))
+      if (( SCHEDULE_DAY < 1 )); then SCHEDULE_DAY=7; fi
+      SCHEDULE_SEL=0
+      SCHEDULE_OFFSET=0
+      _schedule_precompute_day
+      ;;
+    RIGHT)
+      SCHEDULE_DAY=$(( $( _schedule_day ) + 1 ))
+      if (( SCHEDULE_DAY > 7 )); then SCHEDULE_DAY=1; fi
+      SCHEDULE_SEL=0
+      SCHEDULE_OFFSET=0
+      _schedule_precompute_day
+      ;;
     UP)
       if (( SCHEDULE_SEL > 0 )); then SCHEDULE_SEL=$((SCHEDULE_SEL - 1)); fi
       ;;
     DOWN)
-      total="$(_schedule_today_count)"
+      total="$(_schedule_day_count)"
       if (( total > 0 && SCHEDULE_SEL < total - 1 )); then SCHEDULE_SEL=$((SCHEDULE_SEL + 1)); fi
       ;;
     PGUP)
@@ -301,7 +407,7 @@ handle_schedule_key() {
       if (( SCHEDULE_SEL < 0 )); then SCHEDULE_SEL=0; fi
       ;;
     PGDN)
-      total="$(_schedule_today_count)"
+      total="$(_schedule_day_count)"
       SCHEDULE_SEL=$((SCHEDULE_SEL + 10))
       if (( total > 0 && SCHEDULE_SEL >= total )); then SCHEDULE_SEL=$((total - 1)); fi
       if (( SCHEDULE_SEL < 0 )); then SCHEDULE_SEL=0; fi
