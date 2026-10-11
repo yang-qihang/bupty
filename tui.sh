@@ -127,9 +127,10 @@ tui_render_footer() {
 
 # 整屏渲染：标题 + 内容 + 底部。
 # 先写入临时帧缓冲（花括号组，全局状态保留），再一次性输出，避免逐行重绘闪烁。
+# 用 \033[2J 全清屏（单次写入、原子更新，不会白闪），彻底清除上一帧残留的文字与高亮底色。
 tui_render() {
   {
-    printf '\033[H'
+    printf '\033[2J\033[H'
     tui_render_header
     local i
     for ((i = 0; i < UI_COLS; i++)); do printf '%s' "${_UI_BOX_H}"; done
