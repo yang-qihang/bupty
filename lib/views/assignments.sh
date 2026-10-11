@@ -56,9 +56,10 @@ _assignments_precompute() {
              elif $days == 0 then "今天截止"
              else ("剩 " + ($days | tostring) + " 天") end) as $days_disp
     | ($dl | if . == "" then "text"
-             elif $days < 0 or $days == 0 then "danger"
-             elif $days <= 3 then "warning"
-             else "text" end) as $color
+             elif $days < 0 then (if ($status == "已提交" or $status == "已批改") then "muted" else "purple" end)
+             elif ($status == "已提交" or $status == "已批改") then "success"
+             elif $days <= 3 then "danger"
+             else "warning" end) as $color
     | [ $color, ($deadline_disp | s), ($days_disp | s), ($course | s), ($title | s), ($status | s) ]
     | join("\u001f")
   ' 2>/dev/null || true)"

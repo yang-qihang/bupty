@@ -13,7 +13,7 @@ _BUPTY_UI_LOADED=1
 # 主题角色 SGR 前缀变量：UI_ACCENT / UI_TEXT / UI_MUTED / UI_BORDER /
 # UI_HL(选中背景) / UI_HL_FG(选中前景) / UI_SUCCESS / UI_WARNING / UI_DANGER / UI_TITLE
 UI_ACCENT=""; UI_TEXT=""; UI_MUTED=""; UI_BORDER=""; UI_HL=""; UI_HL_FG=""
-UI_SUCCESS=""; UI_WARNING=""; UI_DANGER=""; UI_TITLE=""
+UI_SUCCESS=""; UI_WARNING=""; UI_DANGER=""; UI_PURPLE=""; UI_TITLE=""
 UI_RESET="$(core_c_reset)"
 
 _ui_is_dark() {
@@ -31,6 +31,7 @@ ui_theme_init() {
     UI_SUCCESS="$(core_sgr 114)"
     UI_WARNING="$(core_sgr 215)"
     UI_DANGER="$(core_sgr 203)"
+    UI_PURPLE="$(core_sgr 135)"
     UI_TITLE="$(core_sgr 39 bold)"
   else
     UI_ACCENT="$(core_sgr 26)"
@@ -42,6 +43,7 @@ ui_theme_init() {
     UI_SUCCESS="$(core_sgr 28)"
     UI_WARNING="$(core_sgr 208)"
     UI_DANGER="$(core_sgr 160)"
+    UI_PURPLE="$(core_sgr 91)"
     UI_TITLE="$(core_sgr 26 bold)"
   fi
 }
@@ -59,6 +61,7 @@ ui_paint() {
     success) prefix="${UI_SUCCESS}" ;;
     warning) prefix="${UI_WARNING}" ;;
     danger) prefix="${UI_DANGER}" ;;
+    purple) prefix="${UI_PURPLE}" ;;
     title) prefix="${UI_TITLE}" ;;
     reset) prefix="${UI_RESET}" ;;
   esac
