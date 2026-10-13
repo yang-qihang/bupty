@@ -141,9 +141,9 @@ _public_render_shuttle() {
   _public_lines_clear
   if [[ -z "${PUBLIC_SHUTTLE}" ]]; then
     if [[ -n "${BUPTY_ERR}" ]]; then
-      _public_line_add " $(ui_paint danger '  班车加载失败，请查看底部错误信息。')"
+      _public_line_add " $(ui_paint danger "$(core_clip '  班车加载失败，请查看底部错误信息。' "$((UI_COLS - 1))")")"
     else
-      _public_line_add " $(ui_paint muted '  暂无班车数据 · 按 r 刷新')"
+      _public_line_add " $(ui_paint muted "$(core_clip '  暂无班车数据 · 按 r 刷新' "$((UI_COLS - 1))")")"
     fi
     _public_lines_print
     return 0
@@ -153,9 +153,9 @@ _public_render_shuttle() {
   date="$(printf '%s' "${PUBLIC_SHUTTLE}" | jq -r '.date // ""' 2>/dev/null || true)"
   status="$(printf '%s' "${PUBLIC_SHUTTLE}" | jq -r '.status // ""' 2>/dev/null || true)"
   next="$(printf '%s' "${PUBLIC_SHUTTLE}" | jq -r '.next_departure // ""' 2>/dev/null || true)"
-  _public_line_add " $(ui_paint title "班车 · ${date} · ${status}")"
+  _public_line_add " $(ui_paint title "$(core_clip "班车 · ${date} · ${status}" "$((UI_COLS - 1))")")"
   if [[ -n "${next}" ]]; then
-    _public_line_add " $(ui_paint success "  ${next}")"
+    _public_line_add " $(ui_paint success "$(core_clip "  ${next}" "$((UI_COLS - 1))")")"
   fi
   _public_line_add ""
 
@@ -163,7 +163,7 @@ _public_render_shuttle() {
   routes_n="$(printf '%s' "${PUBLIC_SHUTTLE}" | jq -r 'if (.routes|type)=="array" then (.routes|length|tostring) else "0" end' 2>/dev/null || true)"
   if [[ -z "${routes_n}" || "${routes_n}" == "null" ]]; then routes_n=0; fi
   if (( routes_n == 0 )); then
-    _public_line_add " $(ui_paint muted '  暂无班车安排。')"
+    _public_line_add " $(ui_paint muted "$(core_clip '  暂无班车安排。' "$((UI_COLS - 1))")")"
     _public_lines_print
     return 0
   fi
@@ -175,9 +175,9 @@ _public_render_shuttle() {
     from="$(printf '%s' "${row}" | jq -r '.from // ""' 2>/dev/null || true)"
     to="$(printf '%s' "${row}" | jq -r '.to // ""' 2>/dev/null || true)"
     label="$(printf '%s' "${row}" | jq -r '.period_label // ""' 2>/dev/null || true)"
-    _public_line_add " $(ui_paint accent "${from} → ${to}")"
+    _public_line_add " $(ui_paint accent "$(core_clip "${from} → ${to}" "$((UI_COLS - 1))")")"
     if [[ -n "${label}" ]]; then
-      _public_line_add " $(ui_paint muted "  ${label}")"
+      _public_line_add " $(ui_paint muted "$(core_clip "  ${label}" "$((UI_COLS - 1))")")"
     fi
     n="$(printf '%s' "${row}" | jq -r 'if (.departures|type)=="array" then (.departures|length|tostring) else "0" end' 2>/dev/null || true)"
     if [[ -z "${n}" || "${n}" == "null" ]]; then n=0; fi
@@ -190,11 +190,11 @@ _public_render_shuttle() {
       next="$(printf '%s' "${dep}" | jq -r '.next // false' 2>/dev/null || true)"
       txt="${time}  ${vehicle}×${count}"
       if [[ "${next}" == "true" ]]; then
-        _public_line_add " $(ui_paint success "▶ ${txt}")"
+        _public_line_add " $(ui_paint success "$(core_clip "▶ ${txt}" "$((UI_COLS - 1))")")"
       elif [[ "${departed}" == "true" ]]; then
-        _public_line_add " $(ui_paint muted "  ${txt}")"
+        _public_line_add " $(ui_paint muted "$(core_clip "  ${txt}" "$((UI_COLS - 1))")")"
       else
-        _public_line_add "   ${txt}"
+        _public_line_add "$(core_clip "   ${txt}" "${UI_COLS}")"
       fi
     done
   done
@@ -219,9 +219,9 @@ _public_render_holidays() {
   printf '\n'
   if [[ -z "${PUBLIC_HOLIDAYS}" ]]; then
     if [[ -n "${BUPTY_ERR}" ]]; then
-      printf ' %s\n' "$(ui_paint danger '  节假日加载失败，请查看底部错误信息。')"
+      printf ' %s\n' "$(ui_paint danger "$(core_clip '  节假日加载失败，请查看底部错误信息。' "$((UI_COLS - 1))")")"
     else
-      printf ' %s\n' "$(ui_paint muted '  暂无节假日数据 · 按 r 刷新')"
+      printf ' %s\n' "$(ui_paint muted "$(core_clip '  暂无节假日数据 · 按 r 刷新' "$((UI_COLS - 1))")")"
     fi
     return 0
   fi
@@ -229,11 +229,11 @@ _public_render_holidays() {
   local year total
   year="$(_public_holiday_year)"
   total="$(_public_holidays_count)"
-  printf ' %s\n' "$(ui_paint muted "节假日 · ${year} 年 · 共 ${total} 条 · [ ] 或 + - 切年份 · ↑↓ 滚动 · r 刷新")"
+  printf ' %s\n' "$(ui_paint muted "$(core_clip "节假日 · ${year} 年 · 共 ${total} 条 · [ ] 或 + - 切年份 · ↑↓ 滚动 · r 刷新" "$((UI_COLS - 1))")")"
   printf '\n'
 
   if (( total == 0 )); then
-    printf ' %s\n' "$(ui_paint muted '  该年份暂无节假日数据。')"
+    printf ' %s\n' "$(ui_paint muted "$(core_clip '  该年份暂无节假日数据。' "$((UI_COLS - 1))")")"
     return 0
   fi
 
@@ -327,9 +327,9 @@ _public_render_events() {
   printf '\n'
   if [[ -z "${PUBLIC_EVENTS}" ]]; then
     if [[ -n "${BUPTY_ERR}" ]]; then
-      printf ' %s\n' "$(ui_paint danger '  活动加载失败，请查看底部错误信息。')"
+      printf ' %s\n' "$(ui_paint danger "$(core_clip '  活动加载失败，请查看底部错误信息。' "$((UI_COLS - 1))")")"
     else
-      printf ' %s\n' "$(ui_paint muted '  暂无活动数据 · 按 r 刷新')"
+      printf ' %s\n' "$(ui_paint muted "$(core_clip '  暂无活动数据 · 按 r 刷新' "$((UI_COLS - 1))")")"
     fi
     return 0
   fi
@@ -337,11 +337,11 @@ _public_render_events() {
   _public_events_filter
   local total
   total="${_PUBLIC_VISIBLE_COUNT}"
-  printf ' %s\n' "$(ui_paint muted "活动 · 未截止 ${total} 条 · ↑↓ 选择 · PgUp/PgDn 翻页 · r 刷新")"
+  printf ' %s\n' "$(ui_paint muted "$(core_clip "活动 · 未截止 ${total} 条 · ↑↓ 选择 · PgUp/PgDn 翻页 · r 刷新" "$((UI_COLS - 1))")")"
   printf '\n'
 
   if (( total == 0 )); then
-    printf ' %s\n' "$(ui_paint muted '  暂无未截止的活动。')"
+    printf ' %s\n' "$(ui_paint muted "$(core_clip '  暂无未截止的活动。' "$((UI_COLS - 1))")")"
     return 0
   fi
 

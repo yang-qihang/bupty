@@ -193,7 +193,7 @@ exams_fetch_data() {
 
 render_exams() {
   if ! creds_load; then
-    printf '\n %s\n' "$(ui_paint muted '  请先在设置中登录。')"
+    printf '\n %s\n' "$(ui_paint muted "$(core_clip '  请先在设置中登录。' "$((UI_COLS - 1))")")"
     return 0
   fi
   if _exams_stale; then

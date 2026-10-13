@@ -273,7 +273,7 @@ _classrooms_render_content() {
 # 进入视图渲染。首次进入同步拉取（短暂阻塞），随后渲染列表或错误。
 render_classrooms() {
   if ! creds_load; then
-    printf '\n %s\n' "$(ui_paint muted '  请先在设置中登录。')"
+    printf '\n %s\n' "$(ui_paint muted "$(core_clip '  请先在设置中登录。' "$((UI_COLS - 1))")")"
     return 0
   fi
   if _classrooms_stale; then
