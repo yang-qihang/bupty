@@ -11,11 +11,16 @@ _BUPTY_UI_LOADED=1
 # ---------------------------------------------------------------------------
 
 # 主题角色 SGR 前缀变量：UI_ACCENT / UI_TEXT / UI_MUTED / UI_BORDER /
-# UI_HL(选中背景) / UI_HL_FG(选中前景) / UI_SUCCESS / UI_WARNING / UI_DANGER /
-# UI_PURPLE / UI_TITLE。
-# 硬约束：每套主题都必须完整定义这 11 个角色——首页卡片、7 个视图、状态栏全读它们，
+# UI_HL(选中背景) / UI_HL_FG(选中前景) / UI_SEL(选中前景·无背景) /
+# UI_SUCCESS / UI_WARNING / UI_DANGER / UI_PURPLE / UI_TITLE。
+# 硬约束：每套主题都必须完整定义这 12 个角色——首页卡片、7 个视图、状态栏全读它们，
 # 缺任意一个就会渲染出无色或串色的行。全部经由 core_sgr 构造，不硬编码 ANSI。
-UI_ACCENT=""; UI_TEXT=""; UI_MUTED=""; UI_BORDER=""; UI_HL=""; UI_HL_FG=""
+#
+# UI_HL / UI_HL_FG **含背景色**（core_sgr 的第 2 个数字参数），只用于「整行铺满」的
+# 反显选区（设置页列表、各视图选中行、ui_select_option）。**不要把它俩当纯前景色用**：
+# 它会给一小段文本刷上背景，在卡片/单元格里表现成一块游离的色块（首页选中卡片曾这样
+# 漏出 9 列蓝底）。需要「选中态的强调前景、且不带背景」时一律用 UI_SEL。
+UI_ACCENT=""; UI_TEXT=""; UI_MUTED=""; UI_BORDER=""; UI_HL=""; UI_HL_FG=""; UI_SEL=""
 UI_SUCCESS=""; UI_WARNING=""; UI_DANGER=""; UI_PURPLE=""; UI_TITLE=""
 UI_RESET="$(core_c_reset)"
 
@@ -97,6 +102,7 @@ _ui_theme_dark() {
   UI_BORDER="$(core_sgr 239)"
   UI_HL="$(core_sgr 0 24 bold)"
   UI_HL_FG="$(core_sgr 15 24 bold)"
+  UI_SEL="$(core_sgr 81 bold)"      # 选中前景·无背景：亮蓝 (#5FD7FF)，深底上比 accent 更醒目
   UI_SUCCESS="$(core_sgr 114)"
   UI_WARNING="$(core_sgr 215)"
   UI_DANGER="$(core_sgr 203)"
@@ -112,6 +118,7 @@ _ui_theme_light() {
   UI_BORDER="$(core_sgr 250)"
   UI_HL="$(core_sgr 0 33 bold)"
   UI_HL_FG="$(core_sgr 17 33 bold)"
+  UI_SEL="$(core_sgr 20 bold)"       # 选中前景·无背景：深蓝 (#0000D7)，白底可读
   UI_SUCCESS="$(core_sgr 28)"
   UI_WARNING="$(core_sgr 130)"    # 深琥珀 #AF5F00 → (175,95,0)，白底 4.71（原 208 仅 2.41，太浅）
   UI_DANGER="$(core_sgr 160)"
@@ -127,6 +134,7 @@ _ui_theme_nord() {
   UI_BORDER="$(core_sgr 240)"        # Polar Night #4C566A → 灰阶 88
   UI_HL="$(core_sgr 15 60 bold)"     # 白字 + 石板蓝底 (95,95,135)
   UI_HL_FG="$(core_sgr 15 60 bold)"
+  UI_SEL="$(core_sgr 117 bold)"      # 选中前景·无背景：亮霜蓝 #87D7FF（accent 提亮）
   UI_SUCCESS="$(core_sgr 108)"       # Aurora green #A3BE8C → (135,175,135)
   UI_WARNING="$(core_sgr 186)"       # Aurora yellow #EBCB8B → (215,215,135)
   UI_DANGER="$(core_sgr 131)"        # Aurora red #BF616A → (175,95,95)
@@ -142,6 +150,7 @@ _ui_theme_gruvbox() {
   UI_BORDER="$(core_sgr 239)"        # bg2 #504945 → 灰阶 78
   UI_HL="$(core_sgr 223 238 bold)"   # 奶油字 + 深灰底 (68,68,68)
   UI_HL_FG="$(core_sgr 223 238 bold)"
+  UI_SEL="$(core_sgr 116 bold)"      # 选中前景·无背景：亮青 #87D7D7（accent 提亮）
   UI_SUCCESS="$(core_sgr 142)"       # green #B8BB26 → (175,175,0)
   UI_WARNING="$(core_sgr 214)"       # yellow #FABD2F → (255,175,0)
   UI_DANGER="$(core_sgr 203)"        # red #FB4934 → (255,95,95)
@@ -157,6 +166,7 @@ _ui_theme_high_contrast() {
   UI_BORDER="$(core_sgr 244)"        # 中灰
   UI_HL="$(core_sgr 0 226 bold)"     # 黑字 + 亮黄底（最高对比的反显）
   UI_HL_FG="$(core_sgr 0 226 bold)"
+  UI_SEL="$(core_sgr 51 bold)"       # 选中前景·无背景：亮青 #00FFFF 加粗（与 accent 同色，纯前景）
   UI_SUCCESS="$(core_sgr 46)"        # 亮绿 #00FF00
   UI_WARNING="$(core_sgr 226)"       # 亮黄 #FFFF00
   UI_DANGER="$(core_sgr 196)"        # 亮红 #FF0000
@@ -222,6 +232,7 @@ ui_paint() {
     muted) prefix="${UI_MUTED}" ;;
     border) prefix="${UI_BORDER}" ;;
     hl) prefix="${UI_HL_FG}" ;;
+    sel) prefix="${UI_SEL}" ;;
     success) prefix="${UI_SUCCESS}" ;;
     warning) prefix="${UI_WARNING}" ;;
     danger) prefix="${UI_DANGER}" ;;

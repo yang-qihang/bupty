@@ -121,6 +121,29 @@ h_join() {
   printf '%s' "${out}"
 }
 
+# 渲染一帧首页的**原始**行（保留 ANSI 转义）到 _H_RAW。
+# 与 h_frame 的区别：h_frame 剥掉转义只留可见文本（量宽用），这里要的正是转义本身
+# ——检查选中卡片有没有漏出 48;5; 背景序列。
+h_frame_raw() {
+  local line
+  _H_RAW=()
+  while IFS= read -r line; do
+    _H_RAW+=("${line}")
+  done < <(render_home)
+}
+
+# 帧内出现「48;5;」背景序列的行号串（空 = 无背景色泄漏）。
+# 重要：本检查必须在 half/off 图标档位下进行——bg 模式图标**合法地**用背景色铺点阵
+# （lib/icons.sh 的 _icon_render_bg），它自己的 48;5; 会被误报成卡片文字区的泄漏。
+# 颜色泄漏与终端宽度无关，所以调用方把图标单独钉在 half，不跟随 h_set_amb 的档位。
+h_bg_leak() {
+  local i out=""
+  for i in "${!_H_RAW[@]}"; do
+    [[ "${_H_RAW[i]}" == *"48;5;"* ]] && out+="${out:+ }$((i + 1))"
+  done
+  printf '%s' "${out}"
+}
+
 ui_theme_init
 
 # ---------------------------------------------------------------------------
@@ -261,6 +284,37 @@ for rows in 1 5 6; do
   want=$(( rows - 5 ))
   (( want < 0 )) && want=0
   assert_eq "$(( ${#_H_LINES[@]} <= want ))" "1" "帧高 <= max(0, UI_ROWS-5)"
+done
+
+# ---------------------------------------------------------------------------
+# 3c. 选中卡片不得有背景色泄漏（本次回归）
+# ---------------------------------------------------------------------------
+# 真实存在过的 bug：home.sh 档位 A（_home_card_a_rows）与档位 B（_home_mini_card）
+# 把带背景色的 UI_HL_FG（core_sgr <fg> <bg>，形如 48;5;N）当**纯前景色**用，于是选中卡
+# 右侧 9 列文本区被刷成一块游离蓝底；而档位 A 的描述行又写死 UI_MUTED，那块蓝中间还
+# 破了个 9×5 的洞。修复：选中前景改用不含背景的 UI_SEL。
+# 断言：整帧（档位 A/B 的所有卡片，含被选中的那张）不得出现 48;5; 背景序列。
+# 档位 C 本就没碰 UI_HL_FG，一并纳入，防止日后回归。
+for amb in 1 2; do
+  # 单独把图标钉在 half：理由见 h_bg_leak 注释（bg 图标自带合法的 48;5;）。
+  BUPTY_AMBIG_W="${amb}"
+  export BUPTY_FORCE_ICONS=half
+  _ICON_INITIALIZED=""
+  icon_init
+  ui_box_init
+  for spec in "79 24 A" "40 24 B" "24 24 C"; do
+    read -r cols rows tier <<< "${spec}"
+    UI_COLS="${cols}" UI_ROWS="${rows}"
+    _home_layout
+    t_begin "选中态无背景泄漏 档位${tier} amb=${amb} cols=${cols}"
+    assert_eq "${_HOME_TIER}" "${tier}" "${cols} 列 × ${rows} 行应为档位 ${tier}"
+    for sel in 0 1 5; do
+      HOME_FOCUS="grid"
+      HOME_SEL="${sel}"
+      h_frame_raw
+      assert_eq "$(h_bg_leak)" "" "sel=${sel} 帧内不得出现 48;5;（选中卡背景色泄漏）"
+    done
+  done
 done
 
 # ---------------------------------------------------------------------------

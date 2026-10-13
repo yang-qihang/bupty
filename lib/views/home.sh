@@ -75,7 +75,7 @@ _home_card_a_rows() {
   local idx="$1" hline="$2" hline_sel="$3" tw="$4"
   local bcol tcol name info name_fit info_fit blank_fit top
   if _home_is_selected "${idx}"; then
-    bcol="${UI_ACCENT}"; tcol="${UI_HL_FG}"
+    bcol="${UI_ACCENT}"; tcol="${UI_SEL}"
   else
     bcol="${UI_BORDER}"; tcol="${UI_TEXT}"
   fi
@@ -87,7 +87,11 @@ _home_card_a_rows() {
 
   icon_render "${HOME_KEYS[$idx]}" "${_HOME_PALETTE[$idx]}"
 
-  # 选中态三线索:顶边框左上角 ▶ 标记 + 边框提亮 + 名称反显。
+  # 选中态三线索:顶边框左上角 ▶ 标记 + 边框提亮 + 名称提亮。
+  # 名称用 UI_SEL（纯前景、**不含背景**）；绝不能用 UI_HL_FG 当纯前景色——它带
+  # 48;5; 背景，曾把选中卡右侧 9 列文本区刷成一块游离蓝底（且描述行用 UI_MUTED，
+  # 那块蓝中间还破了个洞）。描述行维持 UI_MUTED（次要信息），因为现在整张卡片
+  # 没有任何背景色，「一致」体现在没有游离色块，而不是全行同色。
   # 宽度与未选中严格相等——见 _home_render_cards 里按列数反推横线根数的说明。
   if _home_is_selected "${idx}"; then
     top="${bcol}${_UI_BOX_TL}${_UI_BOX_H}▶${hline_sel}${_UI_BOX_TR}${UI_RESET}"
@@ -166,7 +170,7 @@ _home_mini_card() {
   local idx="$1" iw="$2" hline="$3"
   local bcol tcol mark mcol nm info line line_w info_w rest mid
   if _home_is_selected "${idx}"; then
-    bcol="${UI_ACCENT}"; tcol="${UI_HL_FG}"; mark="▶"; mcol="${UI_ACCENT}"
+    bcol="${UI_ACCENT}"; tcol="${UI_SEL}"; mark="▶"; mcol="${UI_ACCENT}"
   else
     bcol="${UI_BORDER}"; tcol="${UI_TEXT}"; mark="▸"; mcol="${UI_MUTED}"
   fi

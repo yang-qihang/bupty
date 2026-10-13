@@ -3,7 +3,7 @@
 #
 # 覆盖 GitHub issue #2 第一条要求：多套具名配色（至少一套浅色）、用户可选、可持久化。
 # 断言要点：
-#   1. 每套主题的 11 个角色变量都非空（最容易漏角色——漏一个就会出现无色/串色行）
+#   1. 每套主题的 12 个角色变量都非空（最容易漏角色——漏一个就会出现无色/串色行）
 #   2. 主题名清单 / 设置页候选 / ui_theme_init 的分派三者一致（无「列了切不过去」，
 #      也无「能切但没列」）
 #   3. 未知主题名有安全兜底：不崩、不留空变量、退回默认主题
@@ -31,8 +31,9 @@ source "${BUPTY_HOME}/lib/ui.sh"
 # shellcheck disable=SC1090
 source "${BUPTY_HOME}/tests/lib/testlib.sh"
 
-# 11 个角色（必须全部由每套主题定义）。
-THEME_ROLES=(UI_ACCENT UI_TEXT UI_MUTED UI_BORDER UI_HL UI_HL_FG UI_SUCCESS UI_WARNING UI_DANGER UI_PURPLE UI_TITLE)
+# 12 个角色（必须全部由每套主题定义）。UI_SEL 是「选中前景·无背景」，
+# 首页选中卡片文本区用它，不能退回带背景的 UI_HL_FG。
+THEME_ROLES=(UI_ACCENT UI_TEXT UI_MUTED UI_BORDER UI_HL UI_HL_FG UI_SEL UI_SUCCESS UI_WARNING UI_DANGER UI_PURPLE UI_TITLE)
 
 # 某角色变量非空（失败时点名主题 + 角色）。
 assert_role_nonempty() {
@@ -45,7 +46,7 @@ assert_role_nonempty() {
   fi
 }
 
-# 当前已应用主题的 11 个角色拼成的签名（用于证明两套主题确实不同）。
+# 当前已应用主题的 12 个角色拼成的签名（用于证明两套主题确实不同）。
 theme_signature() {
   local r out=""
   for r in "${THEME_ROLES[@]}"; do out+="${!r}|"; done
