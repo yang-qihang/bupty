@@ -18,7 +18,7 @@ BUPTY_AUTOSTART_FILE="$(_autostart_dir)/bupty.desktop"
 
 # 默认设置。
 _settings_default_json() {
-  jq -n '{autostart_enabled:false, notify_enabled:false, notify_interval:60}'
+  jq -n '{autostart_enabled:false, notify_enabled:false, notify_interval:60, theme:"dark"}'
 }
 
 # 从磁盘加载设置到 BUPTY_SETTINGS_JSON。0=有效文件；1=缺失/损坏（回退默认值）。
@@ -31,7 +31,8 @@ settings_load() {
       {
         autostart_enabled: (((.autostart_enabled // false) == true)),
         notify_enabled: (((.notify_enabled // false) == true)),
-        notify_interval: (((.notify_interval // 60) | tonumber? // 60))
+        notify_interval: (((.notify_interval // 60) | tonumber? // 60)),
+        theme: (if (.theme | type) == "string" then .theme else "dark" end)
       }' 2>/dev/null)" || { BUPTY_SETTINGS_JSON="$(_settings_default_json)"; return 1; }
     return 0
   fi
@@ -76,6 +77,18 @@ settings_set() {
     notify_interval)
       BUPTY_SETTINGS_JSON="$(printf '%s' "${BUPTY_SETTINGS_JSON}" | jq -c --arg k "${key}" --arg v "${value}" \
         '.[$k] = ([1, (($v | tonumber?) // 60)] | max)' 2>/dev/null)" || return 1
+      ;;
+    theme)
+      # 主题是枚举：合法名以 ui.sh 的 ui_theme_valid 为准（ui.sh 未加载时退回
+      # 结构校验，保证 settings.sh 可独立使用）。非法名一律拒绝写入，
+      # 避免 settings.json 里出现切不过去的主题名。
+      if declare -F ui_theme_valid >/dev/null 2>&1; then
+        ui_theme_valid "${value}" || return 1
+      else
+        [[ "${value}" =~ ^[a-z][a-z0-9-]*$ ]] || return 1
+      fi
+      BUPTY_SETTINGS_JSON="$(printf '%s' "${BUPTY_SETTINGS_JSON}" | jq -c --arg k "${key}" --arg v "${value}" \
+        '.[$k] = $v' 2>/dev/null)" || return 1
       ;;
     *)
       return 1
