@@ -169,8 +169,14 @@ _classrooms_render_row() {
   local i="$1"
   local row="${_CLASSROOMS_ROWS[$i]:-}"
   [[ -z "${row}" ]] && return 0
-  local building room size slot_text
-  IFS=$'\x1f' read -r building room size slot_text <<< "${row}"
+  # 参数展开切分 TSV，避免每条一次 herestring（fork）。
+  local building room size slot_text rest
+  building="${row%%$'\x1f'*}"
+  rest="${row#*$'\x1f'}"
+  room="${rest%%$'\x1f'*}"
+  rest="${rest#*$'\x1f'}"
+  size="${rest%%$'\x1f'*}"
+  slot_text="${rest#*$'\x1f'}"
 
   local cap="" line
   if [[ -n "${size}" && "${size}" != "null" ]]; then
@@ -183,9 +189,11 @@ _classrooms_render_row() {
   fi
 
   if [[ "${i}" -eq "${CLASSROOMS_SEL}" ]]; then
-    printf ' %s\n' "$(ui_paint hl "› $(core_fit "${line}" "$((UI_COLS - 4))")")"
+    _core_fit_compute "${line}" "$((UI_COLS - 4))"
+    printf ' %s› %s%s\n' "${UI_HL_FG}" "${_CORE_FIT_OUT}" "${UI_RESET}"
   else
-    printf '   %s\n' "$(core_fit "${line}" "$((UI_COLS - 6))")"
+    _core_fit_compute "${line}" "$((UI_COLS - 6))"
+    printf '   %s\n' "${_CORE_FIT_OUT}"
   fi
 }
 
@@ -229,7 +237,8 @@ _classrooms_render_list() {
     return 0
   fi
 
-  local visible=$((UI_ROWS - 9))
+  # 顶部固定行：页眉+分隔(2) + 空行+标题+信息行+空行+楼筛选两行(6) + 底部三行(3) = 11。
+  local visible=$((UI_ROWS - 11))
   if (( visible < 4 )); then visible=4; fi
   if (( CLASSROOMS_SEL >= total )); then CLASSROOMS_SEL=$((total - 1)); fi
   if (( CLASSROOMS_SEL < 0 )); then CLASSROOMS_SEL=0; fi
@@ -248,6 +257,7 @@ _classrooms_render_list() {
 # 内容渲染：信息行 + 楼筛选 + 房间列表。
 _classrooms_render_content() {
   printf '\n'
+  printf ' %s\n' "$(ui_paint title '空教室')"
   if [[ -z "${CLASSROOMS_DATA}" ]]; then
     if [[ -n "${BUPTY_ERR}" ]]; then
       printf ' %s\n' "$(ui_paint danger '  加载失败，请查看底部错误信息。')"

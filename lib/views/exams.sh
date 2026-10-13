@@ -122,9 +122,11 @@ _exams_render_row() {
   [[ -z "${line}" ]] && return 0
 
   if [[ "${i}" -eq "${EXAMS_SEL}" ]]; then
-    printf ' %s\n' "$(ui_paint hl "› $(core_fit "${line}" "$((UI_COLS - 4))")")"
+    _core_fit_compute "${line}" "$((UI_COLS - 4))"
+    printf ' %s› %s%s\n' "${UI_HL_FG}" "${_CORE_FIT_OUT}" "${UI_RESET}"
   else
-    printf '   %s\n' "$(core_fit "${line}" "$((UI_COLS - 6))")"
+    _core_fit_compute "${line}" "$((UI_COLS - 6))"
+    printf '   %s\n' "${_CORE_FIT_OUT}"
   fi
 }
 

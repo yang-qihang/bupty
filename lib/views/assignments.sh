@@ -125,24 +125,43 @@ _assignments_render_row() {
   local i="$1"
   local line="${_ASSIGNMENTS_ROWS[$i]:-}"
   [[ -z "${line}" ]] && return 0
-  local deadline_disp days_disp course title status color raw
-  IFS=$'\x1f' read -r deadline_disp days_disp course title status <<< "${line}"
+  # 参数展开切分 TSV，避免 herestring（fork）。
+  local deadline_disp days_disp course title status color raw rest prefix
+  deadline_disp="${line%%$'\x1f'*}"
+  rest="${line#*$'\x1f'}"
+  days_disp="${rest%%$'\x1f'*}"
+  rest="${rest#*$'\x1f'}"
+  course="${rest%%$'\x1f'*}"
+  rest="${rest#*$'\x1f'}"
+  title="${rest%%$'\x1f'*}"
+  status="${rest#*$'\x1f'}"
   color="${_ASSIGNMENTS_COLORS[$i]:-text}"
 
   local title_w=$((UI_COLS - 58))
   if (( title_w < 8 )); then title_w=8; fi
 
-  raw="$(printf '%s %s %s %s %s' \
-    "$(core_fit "${deadline_disp}" 16)" \
-    "$(core_fit "${days_disp}" 11)" \
-    "$(core_fit "${course}" 16)" \
-    "$(core_fit "${title}" "${title_w}")" \
-    "${status}")"
+  _core_fit_compute "${deadline_disp}" 16
+  raw="${_CORE_FIT_OUT}"
+  _core_fit_compute "${days_disp}" 11
+  raw+=" ${_CORE_FIT_OUT}"
+  _core_fit_compute "${course}" 16
+  raw+=" ${_CORE_FIT_OUT}"
+  _core_fit_compute "${title}" "${title_w}"
+  raw+=" ${_CORE_FIT_OUT} ${status}"
 
   if [[ "${i}" -eq "${ASSIGNMENTS_SEL}" ]]; then
-    printf ' %s%s%s\n' "${UI_HL}" "$(core_fit "${raw}" "$((UI_COLS - 4))")" "${UI_RESET}"
+    _core_fit_compute "${raw}" "$((UI_COLS - 4))"
+    printf ' %s%s%s\n' "${UI_HL}" "${_CORE_FIT_OUT}" "${UI_RESET}"
   else
-    printf '  %s\n' "$(ui_paint "${color}" "${raw}")"
+    case "${color}" in
+      danger) prefix="${UI_DANGER}" ;;
+      warning) prefix="${UI_WARNING}" ;;
+      success) prefix="${UI_SUCCESS}" ;;
+      purple) prefix="${UI_PURPLE}" ;;
+      muted) prefix="${UI_MUTED}" ;;
+      *) prefix="${UI_TEXT}" ;;
+    esac
+    printf '  %s%s%s\n' "${prefix}" "${raw}" "${UI_RESET}"
   fi
 }
 

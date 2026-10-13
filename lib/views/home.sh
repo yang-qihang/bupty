@@ -2,8 +2,8 @@
 # views/home.sh —— 首页菜单。
 
 HOME_ITEMS=(
-  "assignments|作业 DDL|云平台任务截止时间与紧急程度"
-  "schedule|课表|本周课程节次网格"
+  "assignments|作业 DDL|云平台作业截止时间、紧急程度与提交"
+  "schedule|课表|课程节次网格 · 可切周 / 切星期"
   "classrooms|空教室|当天空教室查询与筛选"
   "grades|成绩|学期成绩与平均绩点"
   "exams|考试|期末考试安排"

@@ -176,8 +176,8 @@ tui_render_footer() {
     status="${BUPTY_ERR}"
   fi
   printf ' %s\n' "$(ui_paint muted "$(core_fit "${status:-就绪}" "$((UI_COLS - 2))")")"
-  # 快捷键
-  printf ' %s\n' "$(ui_paint muted "$(core_fit "↑↓ 选择 · Enter 进入 · Esc 返回 · q 退出 · Tab 切换" "$((UI_COLS - 2))")")"
+  # 快捷键（末行不带换行：满屏内容时避免末尾 \n 使终端上滚一行、把页眉顶出屏幕）。
+  printf ' %s' "$(ui_paint muted "$(core_fit "↑↓ 选择 · Enter 进入 · Esc 返回 · q 退出 · Tab 切换 · r 刷新" "$((UI_COLS - 2))")")"
 }
 
 # 整屏渲染：标题 + 内容 + 底部。
@@ -231,7 +231,6 @@ tui_main() {
       fi
       continue
     fi
-    ui_size
     case "${key}" in
       IGNORE) continue ;;   # 鼠标等被忽略的输入，不重绘。
       q|EOF) tui_quit ;;

@@ -34,7 +34,7 @@ _public_valid_rfc3339() {
 # ---------------------------------------------------------------------------
 
 # 从班车源数据解析当日展示。成功输出 JSON，失败置 BUPTY_ERR 并返回 1。
-# 输出：{"date","status","next_departure","notice_title","routes"}。
+# 输出：{"date","status","next_departure","notice_id","notice_title","notice_url","stops","notes","stale","routes"}。
 _public_parse_shuttle() {
   local body="$1"
   local schema
@@ -56,7 +56,9 @@ _public_parse_shuttle() {
   fi
 
   # 1) 取 published_at <= 今天 的通知，按 (published_at, id) 降序。
-  local sorted nid decision action notice_title="" schedules_json=""
+  local sorted nid decision action notice_id="" notice_title="" notice_url="" stops_json="[]" notes_json="[]" schedules_json="" stale=""
+  # 顶部读 stale：服务端可能返回缓存数据（status == "stale"）。
+  stale="$(printf '%s' "${body}" | jq -r 'if .status == "stale" then "true" else "false" end' 2>/dev/null || true)"
   sorted="$(printf '%s' "${body}" | jq -r --arg t "${today}" '
     [.items[]? | select((.published_at // "") != "" and (.published_at <= $t))]
     | sort_by(.published_at, .id) | reverse | .[].id // empty
@@ -80,13 +82,23 @@ _public_parse_shuttle() {
           | if ($active | length) == 0 then {action:"abandon"}
             else
               ($active | map(.period.start_date) | max) as $latest
-              | {action:"ok", title: ($n.title // ""), schedules: [$active[] | select(.period.start_date == $latest)]}
+              | {action:"ok", id: ($n.id // ""),
+                 title: (($n.title // "") | gsub("[\t\r\n]"; " ")),
+                 url: ($n.source_url // ""),
+                 stops: ([(($n.stops // [])[]) | {campus: ((.campus // "") | gsub("[\t\r\n]"; " ")),
+                                                   location: ((.location // "") | gsub("[\t\r\n]"; " "))}]),
+                 notes: ([(($n.notes // [])[]) | tostring | gsub("[\t\r\n]"; " ")]),
+                 schedules: [$active[] | select(.period.start_date == $latest)]}
             end
         end
     ' 2>/dev/null || true)"
     action="$(printf '%s' "${decision}" | jq -r '.action // empty' 2>/dev/null || true)"
     if [[ "${action}" == "ok" ]]; then
+      notice_id="$(printf '%s' "${decision}" | jq -r '.id // ""' 2>/dev/null || true)"
       notice_title="$(printf '%s' "${decision}" | jq -r '.title // ""' 2>/dev/null || true)"
+      notice_url="$(printf '%s' "${decision}" | jq -r '.url // ""' 2>/dev/null || true)"
+      stops_json="$(printf '%s' "${decision}" | jq -c '.stops // []' 2>/dev/null || true)"
+      notes_json="$(printf '%s' "${decision}" | jq -c '.notes // []' 2>/dev/null || true)"
       schedules_json="$(printf '%s' "${decision}" | jq -c '.schedules // []' 2>/dev/null || true)"
       break
     elif [[ "${action}" == "abandon" ]]; then
@@ -163,8 +175,12 @@ _public_parse_shuttle() {
   fi
 
   jq -n --arg date "${today}" --arg status "${status}" --arg next "${next_dep}" \
-    --arg title "${notice_title}" --argjson routes "${routes_final}" \
-    '{date:$date, status:$status, next_departure:$next, notice_title:$title, routes:$routes}'
+    --arg nid "${notice_id}" --arg title "${notice_title}" --arg url "${notice_url}" \
+    --argjson stops "${stops_json}" --argjson notes "${notes_json}" \
+    --arg stale "${stale}" --argjson routes "${routes_final}" \
+    '{date:$date, status:$status, next_departure:$next,
+      notice_id:$nid, notice_title:$title, notice_url:$url,
+      stops:$stops, notes:$notes, stale:$stale, routes:$routes}'
 }
 
 # 拉取班车（协议 3.1）。成功输出 JSON，失败置 BUPTY_ERR 并返回 1。

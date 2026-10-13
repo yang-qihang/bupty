@@ -10,6 +10,7 @@ _BUPTY_CREDS_LOADED=1
 BUPTY_ACCOUNT=""
 BUPTY_PASSWORD=""
 BUPTY_TEACHING_PASSWORD=""
+_CREDS_LOADED=0
 
 # 校验凭据文件是否为「普通文件、非符号链接、大小合理」。
 _creds_check_regular() {
@@ -22,6 +23,18 @@ _creds_check_regular() {
 
 # 从磁盘加载凭据到全局变量。返回 0=有凭据，1=无凭据。
 creds_load() {
+  if [[ "${_CREDS_LOADED}" == "1" ]]; then
+    # 已缓存：仍校验文件为普通文件（拒绝符号链接），但跳过 cat + jq 重复读盘。
+    if _creds_check_regular "${BUPTY_CREDENTIALS_FILE}"; then
+      [[ -n "${BUPTY_ACCOUNT}" && -n "${BUPTY_PASSWORD}" ]]
+      return
+    fi
+    BUPTY_ACCOUNT=""
+    BUPTY_PASSWORD=""
+    BUPTY_TEACHING_PASSWORD=""
+    return 1
+  fi
+  _CREDS_LOADED=1
   BUPTY_ACCOUNT=""
   BUPTY_PASSWORD=""
   BUPTY_TEACHING_PASSWORD=""
@@ -66,6 +79,7 @@ creds_save() {
   BUPTY_ACCOUNT="${account}"
   BUPTY_PASSWORD="${password}"
   BUPTY_TEACHING_PASSWORD="${teaching}"
+  _CREDS_LOADED=1
   return 0
 }
 
@@ -77,6 +91,7 @@ creds_clear() {
   if [[ -e "${BUPTY_CREDENTIALS_FILE}" || -L "${BUPTY_CREDENTIALS_FILE}" ]]; then
     rm -f "${BUPTY_CREDENTIALS_FILE}"
   fi
+  _CREDS_LOADED=1
 }
 
 # 教学云密码：优先独立教学云密码，回退教务密码。

@@ -152,8 +152,9 @@ _schedule_day_rows() {
   d="$(_schedule_day)"
   SCHEDULE_DAY_ROWS="${SCHEDULE_DAY_MAP[${d}]:-}"
   if [[ -n "${SCHEDULE_DAY_ROWS}" ]]; then
-    SCHEDULE_DAY_COUNT="$(wc -l <<< "${SCHEDULE_DAY_ROWS}" 2>/dev/null || echo 0)"
-    SCHEDULE_DAY_COUNT="${SCHEDULE_DAY_COUNT//[^0-9]/}"
+    local -a _rows
+    readarray -t _rows <<< "${SCHEDULE_DAY_ROWS}"
+    SCHEDULE_DAY_COUNT="${#_rows[@]}"
   fi
 }
 
@@ -242,10 +243,11 @@ _schedule_grid() {
 
   # 表头。
   printf ' %s' "${_UI_BOX_V}"
-  printf '%s' "$(ui_paint muted "$(core_fit '节次' "${lw}")")"
+  _core_fit_compute '节次' "${lw}"
+  printf '%s%s%s' "${UI_MUTED}" "${_CORE_FIT_OUT}" "${UI_RESET}"
   printf '%s' "${_UI_BOX_V}"
+  local label flabel
   for d in 1 2 3 4 5 6 7; do
-    local label
     case "${d}" in
       1) label="周一" ;;
       2) label="周二" ;;
@@ -255,12 +257,14 @@ _schedule_grid() {
       6) label="周六" ;;
       7) label="周日" ;;
     esac
+    _core_fit_compute "${label}" "${cw}"
+    flabel="${_CORE_FIT_OUT}"
     if (( d == day_sel )); then
-      printf '%s' "$(ui_paint hl "$(core_fit "${label}" "${cw}")")"
+      printf '%s%s%s' "${UI_HL_FG}" "${flabel}" "${UI_RESET}"
     elif (( d == today )); then
-      printf '%s' "$(ui_paint title "$(core_fit "${label}" "${cw}")")"
+      printf '%s%s%s' "${UI_TITLE}" "${flabel}" "${UI_RESET}"
     else
-      printf '%s' "$(ui_paint muted "$(core_fit "${label}" "${cw}")")"
+      printf '%s%s%s' "${UI_MUTED}" "${flabel}" "${UI_RESET}"
     fi
     printf '%s' "${_UI_BOX_V}"
   done
@@ -277,18 +281,20 @@ _schedule_grid() {
   printf '%s\n' "${_UI_BOX_MR}"
 
   # 数据行。
+  local cell fitted
   for ((s = min_slot; s <= max_slot; s++)); do
     printf ' %s' "${_UI_BOX_V}"
-    printf '%s' "$(core_fit "第$((s + 1))节" "${lw}")"
+    _core_fit_compute "第$((s + 1))节" "${lw}"
+    printf '%s' "${_CORE_FIT_OUT}"
     printf '%s' "${_UI_BOX_V}"
     for d in 1 2 3 4 5 6 7; do
-      local cell fitted
-      cell="$(_schedule_cell_text "${d}" "${s}")"
-      fitted="$(core_fit "${cell}" "${cw}")"
+      cell="${SCHEDULE_CELL_MAP["${d}-${s}"]:-}"
+      _core_fit_compute "${cell}" "${cw}"
+      fitted="${_CORE_FIT_OUT}"
       if (( d == day_sel )); then
         printf '%s%s%s' "${UI_HL}" "${fitted}" "${UI_RESET}"
       elif (( d == today )); then
-        printf '%s' "$(ui_paint title "${fitted}")"
+        printf '%s%s%s' "${UI_TITLE}" "${fitted}" "${UI_RESET}"
       else
         printf '%s' "${fitted}"
       fi
@@ -313,8 +319,14 @@ _schedule_day_row() {
   local i="$1"
   local row="${_SCHEDULE_DAY_ROWS[$i]:-}"
   [[ -z "${row}" ]] && return 0
-  local time_range name room week_text line
-  IFS=$'\x1f' read -r time_range name room week_text <<< "${row}"
+  # 参数展开切分 TSV，避免 herestring（fork）。
+  local time_range name room week_text line rest
+  time_range="${row%%$'\x1f'*}"
+  rest="${row#*$'\x1f'}"
+  name="${rest%%$'\x1f'*}"
+  rest="${rest#*$'\x1f'}"
+  room="${rest%%$'\x1f'*}"
+  week_text="${rest#*$'\x1f'}"
 
   if [[ -n "${room}" ]]; then
     line="${time_range} ${name} @${room} · ${week_text}"
@@ -323,9 +335,11 @@ _schedule_day_row() {
   fi
 
   if [[ "${i}" -eq "${SCHEDULE_SEL}" ]]; then
-    printf ' %s\n' "$(ui_paint hl "› $(core_fit "${line}" "$((UI_COLS - 4))")")"
+    _core_fit_compute "${line}" "$((UI_COLS - 4))"
+    printf ' %s› %s%s\n' "${UI_HL_FG}" "${_CORE_FIT_OUT}" "${UI_RESET}"
   else
-    printf '   %s\n' "$(core_fit "${line}" "$((UI_COLS - 6))")"
+    _core_fit_compute "${line}" "$((UI_COLS - 6))"
+    printf '   %s\n' "${_CORE_FIT_OUT}"
   fi
 }
 

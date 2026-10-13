@@ -25,6 +25,18 @@ strip_ansi() {
   sed 's/\x1b\[[0-9;]*m//g'
 }
 
+# 直接渲染空教室「内容函数」（加载 fixture 数据后调用 _classrooms_render_content），
+# 用于断言内容标题「空教室」存在（render_view 走登录态，不会进入内容渲染）。
+render_classrooms_content() {
+  BUPTY_NO_COLOR=1 COLUMNS=80 LINES=24 BUPTY_HOME="${BUPTY_HOME}" bash -c '
+    set -uo pipefail
+    source "${BUPTY_HOME}/tui.sh"
+    CLASSROOMS_DATA="$(cat "${BUPTY_HOME}/tests/fixtures/classrooms.json")"
+    _classrooms_precompute
+    _classrooms_render_content
+  ' 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g'
+}
+
 t_begin "首页渲染"
 home="$(render_view home)"
 assert_ok grep -q '首页' <<< "${home}"
@@ -46,6 +58,12 @@ t_begin "课表视图渲染（未登录态）"
 sched="$(render_view schedule)"
 assert_ok grep -q '课表' <<< "${sched}"
 assert_ok grep -q '请先在设置中登录' <<< "${sched}"
+
+t_begin "空教室视图内容渲染（含标题）"
+cr="$(render_classrooms_content)"
+assert_ok grep -qE '^ 空教室$' <<< "${cr}"
+assert_ok grep -q '西土城' <<< "${cr}"
+assert_ok grep -q '主楼' <<< "${cr}"
 
 t_begin "渲染输出非空且无 NUL 字节"
 if [[ -n "${home}" ]]; then

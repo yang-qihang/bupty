@@ -146,17 +146,28 @@ core_pad() {
 }
 
 # 按显示宽度截断文本并补空格到指定宽度（中文按 2 列）。
-core_fit() {
+# 单趟扫描截断，避免超宽行逐字符回退造成的 O(n²) 卡顿。
+# 无 fork 计算内核：结果写入全局 _CORE_FIT_OUT（已含补齐空格），供渲染热循环直接取用。
+_core_fit_compute() {
   local s="${1:-}" width="${2:-0}"
   (( width < 0 )) && width=0
-  _core_width "${s}"
-  # 超宽时从尾部逐字符裁剪（罕见路径）。
-  while (( _CORE_W > width )); do
-    s="${s%?}"
-    _core_width "${s}"
+  local out="" w=0 i ch cp cw pad
+  for ((i = 0; i < ${#s}; i++)); do
+    ch="${s:i:1}"
+    printf -v cp '%d' "'${ch}"
+    if (( cp > 255 )); then cw=2; else cw=1; fi
+    if (( w + cw > width )); then break; fi
+    out+="${ch}"
+    w=$((w + cw))
   done
-  printf '%s' "${s}"
-  printf '%*s' "$((width - _CORE_W))" ''
+  pad=$(( width - w ))
+  (( pad < 0 )) && pad=0
+  printf -v _CORE_FIT_OUT '%s%*s' "${out}" "${pad}" ''
+}
+
+core_fit() {
+  _core_fit_compute "${1:-}" "${2:-0}"
+  printf '%s' "${_CORE_FIT_OUT}"
 }
 
 # 判断是否为 UTF-8 终端（决定是否用 Unicode 盒子字符）。
