@@ -27,6 +27,8 @@ if [[ "${1:-}" == "--background" ]]; then
   # shellcheck disable=SC1090
   source "${BUPTY_HOME}/lib/settings.sh"
   # shellcheck disable=SC1090
+  source "${BUPTY_HOME}/lib/booking.sh"
+  # shellcheck disable=SC1090
   source "${BUPTY_HOME}/lib/background.sh"
   background_run
   exit $?

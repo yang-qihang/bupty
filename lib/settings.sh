@@ -18,7 +18,7 @@ BUPTY_AUTOSTART_FILE="$(_autostart_dir)/bupty.desktop"
 
 # 默认设置。
 _settings_default_json() {
-  jq -n '{autostart_enabled:false, notify_enabled:false, notify_interval:60}'
+  jq -n '{autostart_enabled:false, notify_enabled:false, notify_interval:60, hidden_classrooms:[], auto_book_enabled:false, pending_bookings:[]}'
 }
 
 # 从磁盘加载设置到 BUPTY_SETTINGS_JSON。0=有效文件；1=缺失/损坏（回退默认值）。
@@ -31,7 +31,10 @@ settings_load() {
       {
         autostart_enabled: (((.autostart_enabled // false) == true)),
         notify_enabled: (((.notify_enabled // false) == true)),
-        notify_interval: (((.notify_interval // 60) | tonumber? // 60))
+        notify_interval: (((.notify_interval // 60) | tonumber? // 60)),
+        hidden_classrooms: (((.hidden_classrooms // []) | map(select(type == "string")))),
+        auto_book_enabled: (((.auto_book_enabled // false) == true)),
+        pending_bookings: (((.pending_bookings // []) | map(select(type == "string"))))
       }' 2>/dev/null)" || { BUPTY_SETTINGS_JSON="$(_settings_default_json)"; return 1; }
     return 0
   fi
@@ -69,7 +72,7 @@ settings_set() {
   local key="$1" value="$2"
   settings_load || true
   case "${key}" in
-    autostart_enabled|notify_enabled)
+    autostart_enabled|notify_enabled|auto_book_enabled)
       BUPTY_SETTINGS_JSON="$(printf '%s' "${BUPTY_SETTINGS_JSON}" | jq -c --arg k "${key}" --arg v "${value}" \
         '.[$k] = ($v == "true")' 2>/dev/null)" || return 1
       ;;
@@ -81,6 +84,25 @@ settings_set() {
       return 1
       ;;
   esac
+  settings_save
+}
+
+# 读取数组键，每行输出一个元素（用于 hidden_classrooms 等）。
+settings_get_array() {
+  local key="$1"
+  settings_load || true
+  printf '%s' "${BUPTY_SETTINGS_JSON}" | jq -r --arg k "${key}" '.[$k] // [] | .[]' 2>/dev/null
+}
+
+# 设置数组键（value 为换行分隔的元素列表）并原子落盘。
+settings_set_array() {
+  local key="$1" value="$2"
+  settings_load || true
+  local arr="[]"
+  if [[ -n "${value}" ]]; then
+    arr="$(printf '%s' "${value}" | jq -R -s -c 'split("\n") | map(select(. != ""))' 2>/dev/null)" || arr="[]"
+  fi
+  BUPTY_SETTINGS_JSON="$(printf '%s' "${BUPTY_SETTINGS_JSON}" | jq -c --arg k "${key}" --argjson a "${arr}" '.[$k] = $a' 2>/dev/null)" || return 1
   settings_save
 }
 

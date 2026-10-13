@@ -410,7 +410,7 @@ _schedule_render_content() {
   else
     week_disp="第 ${current_week} 周"
   fi
-  printf ' %s\n' "$(ui_paint muted "学期 ${term_id} · ${week_disp} · 开学 ${term_start_date} · [ ] 切周")"
+  printf ' %s\n' "$(ui_paint muted "$(core_fit "学期 ${term_id} · ${week_disp} · 开学 ${term_start_date} · [ ] 切周" "$((UI_COLS - 2))")")"
   printf '\n'
 
   if [[ -z "${SCHEDULE_MIN_SLOT}" || -z "${SCHEDULE_MAX_SLOT}" ]]; then

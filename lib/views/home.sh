@@ -8,6 +8,7 @@ HOME_ITEMS=(
   "grades|成绩|学期成绩与平均绩点"
   "exams|考试|期末考试安排"
   "public|公共查询|班车 · 节假日 · 活动"
+  "booking|研修间|图书馆研修间预约与自动抢约"
   "settings|设置|登录账号与偏好"
 )
 HOME_SEL=0

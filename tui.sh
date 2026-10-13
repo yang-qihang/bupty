@@ -6,7 +6,7 @@ set -euo pipefail
 _TUI_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # 加载核心库。
-for _lib in core settings http session creds parse sjd ucloud public ui submit; do
+for _lib in core settings http session creds parse sjd ucloud public ui submit booking; do
   # shellcheck disable=SC1090
   source "${_TUI_DIR}/lib/${_lib}.sh"
 done
@@ -55,7 +55,7 @@ tui_set_status() {
 }
 
 # 顶级标签页顺序（用于 Tab 切换）。
-TUI_TABS=(home assignments schedule classrooms grades exams public settings)
+TUI_TABS=(home assignments schedule classrooms grades exams public booking settings)
 
 tui_next_tab() {
   local i cur=-1
@@ -159,6 +159,7 @@ ui_view_title() {
     grades) printf '成绩' ;;
     exams) printf '考试' ;;
     public) printf '公共查询' ;;
+    booking) printf '研修间' ;;
     *) printf '%s' "$1" ;;
   esac
 }
@@ -210,7 +211,7 @@ tui_main() {
   ui_hide_cursor
   ui_enter_alt_screen
   TUI_FRAME_FILE="$(mktemp)"
-  trap '_async_stop; rm -f "${TUI_FRAME_FILE}"; ui_exit_alt_screen; ui_restore_mode' EXIT
+  trap '_async_stop; rm -f "${TUI_FRAME_FILE}"; rm -f "${BUPTY_BOOKING_COOKIE_JAR:-}" 2>/dev/null || true; ui_exit_alt_screen; ui_restore_mode' EXIT
   # 窗口尺寸变化时置位，主循环在下个超时点立即重绘（响应 resize）。
   trap 'TUI_RESIZED=1' WINCH
 
