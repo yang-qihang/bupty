@@ -6,7 +6,7 @@ set -euo pipefail
 _TUI_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # 加载核心库。
-for _lib in core settings http session creds parse sjd ucloud public ui submit; do
+for _lib in core settings http session creds parse sjd ucloud public ui icons submit; do
   # shellcheck disable=SC1090
   source "${_TUI_DIR}/lib/${_lib}.sh"
 done
@@ -130,22 +130,73 @@ _async_poll() {
 
 # 顶部标题栏。
 tui_render_header() {
-  local title right right_w left_w pad i
+  local title right gear title_w left_w right_w gear_w avail pad i gap
   title="$(ui_view_title "${TUI_VIEW}")"
   if creds_exists 2>/dev/null; then
     right="${BUPTY_ACCOUNT} · 已登录"
   else
     right="未登录"
   fi
-  # 左侧 = " bupty"(6 列) + " "(1 列) + 标题；右侧 = 账号状态。
-  left_w=$(( 6 + 1 + $(core_fit_width "${title}") ))
+  # 设置从模块级降到顶栏右侧：账号状态之后跟一个 ⚙ 设置 焦点项。
+  gear="⚙ 设置"
+  # 标题与它右侧的内容之间至少留 1 格，绝不能贴在一起（如「首页⚙ 设置」）。
+  gap=1
+  # 「 bupty」本身固定占 6 列，再加一个分隔空格。
+  title_w="$(core_fit_width "${title}")"
+  left_w=$(( 6 + 1 + title_w ))
   right_w="$(core_fit_width "${right}")"
-  pad=$(( UI_COLS - left_w - right_w ))
-  (( pad < 0 )) && pad=0
+  gear_w="$(core_fit_width "${gear}")"
+  # 连「 bupty」都放不下（现实终端不会出现）：只保留能放下的部分，保证不溢出。
+  if (( UI_COLS < 7 )); then
+    printf '%s\n' "$(ui_paint accent "$(core_fit " ${BUPTY_NAME}" "${UI_COLS}")")"
+    return 0
+  fi
+  if (( left_w + right_w + gear_w + 2 > UI_COLS )); then
+    # 空间不足：从右往左逐级让位——先丢掉账号状态，再把「⚙ 设置」退成「⚙」，
+    # 再退到整个丢掉齿轮，最后才把标题截断到剩余空间。这样极窄终端下
+    # 还留得住标题，而不是把齿轮硬挤在标题后面。
+    right=""
+    if (( left_w + gap + gear_w > UI_COLS )); then
+      gear="⚙"
+      gear_w="$(core_fit_width "${gear}")"
+    fi
+    if (( left_w + gap + gear_w > UI_COLS )); then
+      gear=""
+      gear_w=0
+    fi
+    # 标题最多占满让位后剩下的空间（齿轮还在时要先扣掉 gap 与齿轮本身）。
+    avail=$(( UI_COLS - 6 - 1 ))
+    (( gear_w > 0 )) && avail=$(( avail - gap - gear_w ))
+    (( avail < 0 )) && avail=0
+    if (( title_w > avail )); then
+      title="$(core_fit "${title}" "${avail}")"
+      title_w="${avail}"
+    fi
+    left_w=$(( 6 + 1 + title_w ))
+    pad=$(( UI_COLS - left_w - gear_w ))
+    (( pad < 0 )) && pad=0
+  else
+    avail=$(( UI_COLS - left_w - gear_w - 2 ))
+    if (( right_w > avail )); then
+      right="$(core_fit "${right}" "${avail}")"
+      pad=0
+    else
+      pad=$(( avail - right_w ))
+    fi
+  fi
   printf '%s' "$(ui_paint accent " ${BUPTY_NAME}")"
   printf ' %s' "$(ui_paint title "${title}")"
   for ((i = 0; i < pad; i++)); do printf ' '; done
-  printf '%s\n' "$(ui_paint muted "${right}")"
+  if [[ -n "${right}" ]]; then
+    printf '%s' "$(ui_paint muted "${right}")"
+    printf '  '
+  fi
+  if [[ "${TUI_VIEW}" == "home" && "${HOME_FOCUS:-grid}" == "settings" ]]; then
+    printf '%s' "$(ui_paint hl "${gear}")"
+  else
+    printf '%s' "$(ui_paint accent "${gear}")"
+  fi
+  printf '\n'
 }
 
 # 视图标题（供顶栏与帮助）。
@@ -203,12 +254,16 @@ tui_render() {
 
 tui_main() {
   ui_theme_init
-  ui_box_init
   ui_size
   creds_load || true
   ui_raw_mode
   ui_hide_cursor
   ui_enter_alt_screen
+  # 图标层内部完成 DSR 宽度实测(复用 lib/core.sh 的 core_probe_ambig)，
+  # 实测成功时回写 BUPTY_AMBIG_W / ICON_UNICODE_W。必须在备用屏幕之后、第一帧之前。
+  icon_init
+  # 边框字符必须在 icon_init 之后确定:读 ICON_UNICODE_W 决定制表符是否退 ASCII。
+  ui_box_init
   TUI_FRAME_FILE="$(mktemp)"
   trap '_async_stop; rm -f "${TUI_FRAME_FILE}"; ui_exit_alt_screen; ui_restore_mode' EXIT
   # 窗口尺寸变化时置位，主循环在下个超时点立即重绘（响应 resize）。
@@ -251,9 +306,11 @@ tui_main() {
 # 单帧渲染入口（供测试捕获）。
 tui_render_once() {
   ui_theme_init
-  ui_box_init
   ui_size
   creds_load || true
+  # 非 TTY 下 icon_init 判定 off 且不设 ICON_UNICODE_W，ui_box_init 保持 Unicode 边框。
+  icon_init
+  ui_box_init
   TUI_FRAME_FILE="$(mktemp)"
   tui_render
   rm -f "${TUI_FRAME_FILE}"
