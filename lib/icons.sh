@@ -11,7 +11,7 @@
 #   ICON_ROWS[0..5] # icon_render 的产出：恰好 6 行
 #
 #   icon_init                      # 幂等；探测终端并设好 ICON_MODE / ICON_UNICODE_W
-#   icon_render <键> [颜色SGR]     # 结果写进全局数组 ICON_ROWS[0..ICON_H-1]
+#   icon_render <键> [颜色SGR] [复位SGR]   # 结果写进全局数组 ICON_ROWS[0..ICON_H-1]
 #   icon_plain_row <下标>          # 纯 ASCII 行（无转义/无半块字符），给测试与宽度校验用
 #
 # 依赖：icon_render / icon_plain_row / icon_grid 自成一体，不依赖 core.sh / ui.sh（可独立 source）。
@@ -38,7 +38,10 @@ ICON_MODE="off"
 # icon_render 的产出：全局数组，长度恰好 6，行宽恰好 12 显示列。
 ICON_ROWS=()
 
-# SGR 复位串（本文件内部使用，不依赖 core.sh）。
+# 默认复位串：调用方没传第三参（复位SGR）时使用，保持 icon_render 的向后兼容。
+# 这里刻意只用裸 \033[0m——icons.sh 承诺不依赖 core.sh / 主题变量，可独立 source。
+# 整屏铺了底色的调用方（如 lib/views/home.sh）必须显式传入 UI_RESET（复位 + 恢复底色），
+# 否则裸复位之后那几格会漏回终端底色，破坏「\033[0m 后紧跟底色 SGR」的帧内不变量。
 _ICON_RESET=$'\033[0m'
 
 # 当前已加载的点阵（icon_render 时填充）：12 行字符串，每行 12 个 '.'/'#'。
@@ -196,8 +199,9 @@ _icon_blank_row() {
 # ---------------------------------------------------------------------------
 
 # half：半块字符 ▀▄█，1 列 × 2 点。颜色作为前景色整行包裹，行尾补复位。
+# 复位串由调用方传入（缺省 _ICON_RESET）——整屏铺底后必须传 UI_RESET 保持底色。
 _icon_render_half() {
-  local color="${1:-}" r c t b row cells
+  local color="${1:-}" reset="${2:-${_ICON_RESET}}" r c t b row cells
   for ((r = 0; r < ICON_H; r++)); do
     cells=""
     for ((c = 0; c < ICON_W; c++)); do
@@ -210,7 +214,7 @@ _icon_render_half() {
       else cells+=' '; fi
     done
     if [[ -n "${color}" ]]; then
-      row="${color}${cells}${_ICON_RESET}"
+      row="${color}${cells}${reset}"
     else
       row="${cells}"
     fi
@@ -220,8 +224,9 @@ _icon_render_half() {
 
 # bg：背景色空格，1 列 × 1 点；纵向每 2 点取 1 点，行数与 half 完全一致（12 列 × 6 行）。
 # 颜色作为背景色逐格铺底（空格是 Narrow 宽度，绝对安全）。无颜色时退化为 '#' 骨架（形状仍可见）。
+# 复位串由调用方传入（缺省 _ICON_RESET）——整屏铺底后必须传 UI_RESET 保持底色。
 _icon_render_bg() {
-  local color="${1:-}" bg_sgr="" r c row
+  local color="${1:-}" reset="${2:-${_ICON_RESET}}" bg_sgr="" r c row
   if [[ -n "${color}" ]]; then
     bg_sgr="$(_icon_bg_sgr "${color}")"
   fi
@@ -230,7 +235,7 @@ _icon_render_bg() {
     for ((c = 0; c < ICON_W; c++)); do
       if [[ "${_ICON_GRID[r * 2]:c:1}" == '#' ]]; then
         if [[ -n "${bg_sgr}" ]]; then
-          row+="${bg_sgr} ${_ICON_RESET}"
+          row+="${bg_sgr} ${reset}"
         else
           row+='#'
         fi
@@ -254,12 +259,14 @@ _icon_render_off() {
 # 冻结接口：icon_render
 # ---------------------------------------------------------------------------
 
-# icon_render <键> [颜色SGR]
+# icon_render <键> [颜色SGR] [复位SGR]
 #   键不在 ICON_KEYS 里 → 六行空格，返回非 0。
 #   颜色SGR 为调用方传入的完整 SGR 串（如 $'\033[38;5;203m'）；空串 = 不上色。
+#   复位SGR 为着色行行尾 / 每格之后的复位串；缺省为 _ICON_RESET（裸 \033[0m，旧行为不变）。
+#     整屏铺底的调用方必须传 UI_RESET（复位 + 恢复底色），否则裸复位之后会漏回终端底色。
 #   结果写入全局数组 ICON_ROWS（长度恰好 6），不向 stdout 打印任何东西。
 icon_render() {
-  local key="${1:-}" color="${2:-}" i
+  local key="${1:-}" color="${2:-}" reset="${3:-${_ICON_RESET}}" i
   ICON_ROWS=()
 
   if _icon_is_key "${key}"; then
@@ -273,8 +280,8 @@ icon_render() {
   fi
 
   case "${ICON_MODE:-off}" in
-    half) _icon_render_half "${color}" ;;
-    bg)   _icon_render_bg "${color}" ;;
+    half) _icon_render_half "${color}" "${reset}" ;;
+    bg)   _icon_render_bg "${color}" "${reset}" ;;
     *)    _icon_render_off ;;
   esac
   return 0

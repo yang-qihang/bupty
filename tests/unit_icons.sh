@@ -95,6 +95,18 @@ i_ends_with() {
   [[ "$1" == *"$2" ]]
 }
 
+# 字符串是否含裸复位 \033[0m。
+i_has_reset() {
+  [[ "${1:-}" == *$'\033[0m'* ]]
+}
+
+# 一行里出现子串 sub 的次数（最短匹配逐个剥，不做贪婪正则）。
+i_count() {
+  local s="${1:-}" sub="${2:-}" n=0
+  while [[ "${s}" == *"${sub}"* ]]; do s="${s#*"${sub}"}"; n=$((n + 1)); done
+  printf '%s' "${n}"
+}
+
 # 复位图标层状态，以便重新跑 icon_init 的某个分支。
 i_reset_icons() {
   unset _ICON_INITIALIZED
@@ -282,5 +294,78 @@ for ((i = 0; i < 6; i++)); do
   assert_eq "$(i_width "$(i_strip "${ICON_ROWS[i]}")")" "12" "bg 档 BUPTY_AMBIG_W=2 时行${i} 宽 12"
 done
 BUPTY_AMBIG_W=1
+
+# ---------------------------------------------------------------------------
+# E. 三参数形式：复位串必须用「传进去的那个」，而不是缺省 _ICON_RESET
+# ---------------------------------------------------------------------------
+# 背景：本轮的图标漏色修复恰恰落在**第三参数**上——生产调用点 lib/views/home.sh:102
+# 传的是 ${UI_RESET}（复位 + 立刻补底色），而两参调用用缺省的 _ICON_RESET（裸 \033[0m）。
+# 旧测试只覆盖两参形式（复位走缺省），所以「第三参数到底有没有被用上」是零覆盖的。
+# 这一节把「传进去的复位串」与「缺省的 _ICON_RESET」区分开：形态相近但**不相等**
+# （_ICON_RESET 是 _ICON_T_RESET 的前缀），于是「用了传入串」与「用了缺省串」可判别。
+_ICON_T_RESET=$'\033[0m\033[48;5;233m'   # 形如某主题的 UI_RESET；与 _ICON_RESET 不同
+
+# _ICON_RESET 必须是 _ICON_T_RESET 的前缀（否则下面的判别不成立）。
+t_begin "E0 判别基准"
+assert_eq "$([[ "${_ICON_T_RESET}" == "${_ICON_RESET}"* ]] && printf yes || printf no)" "yes" \
+  "_ICON_RESET 必须是 _ICON_T_RESET 的前缀（否则「结尾是不是缺省串」判不出来）"
+assert_eq "$([[ "${_ICON_T_RESET}" == "${_ICON_RESET}" ]] && printf same || printf diff)" "diff" \
+  "两个复位串必须不同（否则本节的断言退化成恒真）"
+
+# 一行里所有复位都必须是传入串：把传入串整段剥掉后，不得再残留任何裸 \033[0m。
+i_reset_all_passed() {
+  local row="$1" rest="${1}"
+  while [[ "${rest}" == *"${_ICON_T_RESET}"* ]]; do rest="${rest#*"${_ICON_T_RESET}"}"; done
+  ! i_has_reset "${rest}"
+}
+
+t_begin "E1 三参 half：行尾/行内复位都用传入串"
+i_reset_icons
+BUPTY_FORCE_ICONS=half
+icon_init
+BUPTY_AMBIG_W=1
+icon_render "public" "${_ICON_T_COLOR}" "${_ICON_T_RESET}"
+for ((i = 0; i < 6; i++)); do
+  row="${ICON_ROWS[i]}"
+  assert_ok i_ends_with "${row}" "${_ICON_T_RESET}" "half 行${i} 应以传入的复位串结尾"
+  # 关键判别：不得以缺省的 _ICON_RESET 结尾——它正是漏色的那个裸复位。
+  assert_fail i_ends_with "${row}" "${_ICON_RESET}" "half 行${i} 不得以缺省 _ICON_RESET 结尾"
+  assert_ok test "$(i_count "${row}" "${_ICON_T_RESET}")" -ge 1
+  assert_ok i_reset_all_passed "${row}" "half 行${i} 剥掉传入串后不得残留裸复位"
+  # 宽度与两参一致（换复位串不得改几何）。
+  assert_eq "$(i_width "$(i_strip "${row}")")" "12" "half 行${i} 去转义后仍为 12 列"
+done
+
+t_begin "E2 三参 bg：逐格复位都用传入串"
+i_reset_icons
+BUPTY_FORCE_ICONS=bg
+icon_init
+BUPTY_AMBIG_W=2
+icon_render "public" "${_ICON_T_COLOR}" "${_ICON_T_RESET}"
+i_bg_reset_total=0
+for ((i = 0; i < 6; i++)); do
+  row="${ICON_ROWS[i]}"
+  n="$(i_count "${row}" "${_ICON_T_RESET}")"
+  i_bg_reset_total=$(( i_bg_reset_total + n ))
+  assert_ok i_reset_all_passed "${row}" "bg 行${i} 剥掉传入串后不得残留裸复位"
+  assert_eq "$(i_width "$(i_strip "${row}")")" "12" "bg 行${i} 去转义后仍为 12 列"
+done
+# 整帧至少要有一个着色格（否则上面的「不得残留裸复位」全是空集真命题）。
+assert_ok test "${i_bg_reset_total}" -ge 1
+# 反证：把传入串写坏成缺省裸复位，计数判据必须能分辨（证明 i_count 不是恒值）。
+assert_eq "$(i_count "${_ICON_T_RESET}" "${_ICON_T_RESET}")" "1" "i_count 对单次出现应报 1"
+assert_eq "$(i_count "${_ICON_T_RESET}" "${_ICON_RESET}")" "1" "前缀也算一次匹配（用于判别基准）"
+
+t_begin "E3 两参形式仍用缺省 _ICON_RESET（三参不得污染缺省路径）"
+i_reset_icons
+BUPTY_FORCE_ICONS=half
+icon_init
+BUPTY_AMBIG_W=1
+icon_render "public" "${_ICON_T_COLOR}"
+for ((i = 0; i < 6; i++)); do
+  row="${ICON_ROWS[i]}"
+  assert_ok i_ends_with "${row}" "${_ICON_RESET}" "两参 half 行${i} 应仍以缺省 _ICON_RESET 结尾"
+  assert_fail i_ends_with "${row}" "${_ICON_T_RESET}" "两参 half 行${i} 不应出现传入串（证明参数确实被区分对待）"
+done
 
 t_summary

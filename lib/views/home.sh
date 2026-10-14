@@ -2,8 +2,10 @@
 # views/home.sh —— 首页模块卡片网格（响应式档位 A/B/C + 顶栏设置焦点）。
 #
 # 档位阶梯（宽度不足逐级退化，任何一行都不得超过 UI_COLS）：
-#   A 卡片   3 列 × 2 行，卡片 25×8，需要 UI_COLS >= 79 且 UI_ROWS-5 >= 17
-#   B 迷你卡 2 列 × 3 行，每张 3 行，需要 40 <= UI_COLS < 79 且 UI_ROWS-5 >= 11
+#   正文可用行数 body = UI_ROWS - chrome；chrome 由 banner_chrome_rows 唯一给出
+#   （首页大字符块显示时 11 = 状态行+块 6+分隔线+页脚 3，否则 5 = 顶栏+分隔线+页脚 3）。
+#   A 卡片   3 列 × 2 行，卡片 25×8，需要 UI_COLS >= 79 且 body >= 17
+#   B 迷你卡 2 列 × 3 行，每张 3 行，需要 40 <= UI_COLS < 79 且 body >= 11
 #   C 紧凑行 1 列 × 6 行，UI_COLS < 40 或高度不足
 # 说明：档位 A 的几何是 3×25 + 2×2 = 79 列，所以 A 的宽度阈值是 79 而不是 76
 # （76~78 列放不下三张 25 列卡片会溢出）。以几何公式为准，宁可提前退化。
@@ -26,8 +28,20 @@ _home_is_selected() {
 }
 
 # 计算当前档位与列数，结果写全局 _HOME_TIER / _HOME_COLS。
+# 正文可用行数：显式传入（tui_render 已经按 chrome 口径算好）优先；
+# 否则按唯一口径 banner_chrome_rows 推导（首页出块时 11、否则 5）。
 _home_layout() {
-  local body=$((UI_ROWS - 5))
+  local body="${1:-}"
+  if [[ -z "${body}" ]]; then
+    if declare -F banner_chrome_rows >/dev/null 2>&1; then
+      banner_chrome_rows home
+      body=$(( UI_ROWS - BANNER_CHROME_ROWS ))
+    else
+      # banner.sh 未被加载（docs/palette-lab.sh 单独 source 本文件）：块必然不显示。
+      body=$(( UI_ROWS - 5 ))
+    fi
+  fi
+  (( body < 0 )) && body=0
   if (( UI_COLS >= 79 && body >= 17 )); then
     _HOME_TIER='A'
     _HOME_COLS=3
@@ -85,7 +99,7 @@ _home_card_a_rows() {
   _home_fit "${info}" "${tw}"; info_fit="${_HOME_FIT}"
   _home_fit "" "${tw}"; blank_fit="${_HOME_FIT}"
 
-  icon_render "${HOME_KEYS[$idx]}" "${_HOME_PALETTE[$idx]}"
+  icon_render "${HOME_KEYS[$idx]}" "${_HOME_PALETTE[$idx]}" "${UI_RESET}"
 
   # 选中态三线索:顶边框左上角 ▶ 标记 + 边框提亮 + 名称提亮。
   # 名称用 UI_SEL（纯前景、**不含背景**）；绝不能用 UI_HL_FG 当纯前景色——它带
@@ -231,7 +245,7 @@ _home_render_mini() {
 # 档位 C：1 列紧凑行。这是 UI_COLS < 40 的兜底档，没有任何宽度/高度下限，
 # 因此这里必须自己把两条硬不变量撑住（见 docs/ARCHITECTURE.md）：
 #   * 每行 <= UI_COLS —— 极窄时把模块名也截断（此前名字不参与预算，UI_COLS <= 9 必溢出）
-#   * 帧高 <= UI_ROWS - 5 —— 极矮时按滑动窗口只渲染选中项所在的一段
+#   * 帧高 <= UI_ROWS - chrome —— 极矮时按滑动窗口只渲染选中项所在的一段
 _home_render_list() {
   local pad=0
   (( UI_COLS > 24 )) && pad=1
@@ -241,8 +255,17 @@ _home_render_list() {
   (( budget < 0 )) && budget=0
 
   # 行窗口：可见行数不超过正文高度，且选中项必须落在窗口内（窗口口径同设置页）。
-  # 高度不足时不强行渲染——UI_ROWS <= 5 时正文预算为 0，多画一行就会把帧顶穿。
-  local total=6 body=$(( UI_ROWS - 5 ))
+  # 高度不足时不强行渲染——正文预算为 0 时多画一行就会把帧顶穿。
+  # 正文预算同样走唯一口径 banner_chrome_rows（显式传入优先）。
+  local total=6 body="${1:-}"
+  if [[ -z "${body}" ]]; then
+    if declare -F banner_chrome_rows >/dev/null 2>&1; then
+      banner_chrome_rows home
+      body=$(( UI_ROWS - BANNER_CHROME_ROWS ))
+    else
+      body=$(( UI_ROWS - 5 ))
+    fi
+  fi
   (( body < 0 )) && body=0
   local visible="${body}"
   (( visible > total )) && visible="${total}"
@@ -299,12 +322,13 @@ _home_render_list() {
 }
 
 render_home() {
-  _home_layout
+  local body="${1:-}"
+  _home_layout "${body}"
   _home_palette
   case "${_HOME_TIER}" in
     A) _home_render_cards ;;
     B) _home_render_mini ;;
-    *) _home_render_list ;;
+    *) _home_render_list "${body}" ;;
   esac
 }
 

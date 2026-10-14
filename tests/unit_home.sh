@@ -21,6 +21,15 @@ BUPTY_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export XDG_CONFIG_HOME="$(mktemp -d)"
 trap 'rm -rf "${XDG_CONFIG_HOME}"' EXIT
 
+# 本文件只钉「降级路径」的几何：块关闭时首页帧与改动前逐字节一致。
+# 块是否显示取决于 core_utf8（即 locale）：本机 Git Bash 是非 UTF-8（块自然关），
+# 而 WSL/LANG=C.UTF-8 下 core_utf8 为真、BUPTY_AMBIG_W=1，块会**自行打开**，
+# 于是下面的 `UI_ROWS=22 → body17 → A` 会变成 `body11 → B`——同一份断言在两种
+# locale 下结论相反。为了可复现，这里显式钉住 BUPTY_FORCE_BANNER=0（计划里
+# 「测试环境下块默认关闭」的那条性质），让本文件永远只测降级路径。
+# 块启用后的行为由 task B 的独立测试覆盖，不在这里断言。
+export BUPTY_FORCE_BANNER=0
+
 # tui.sh 自己会 `set -euo pipefail`，而本测试靠断言计数判定成败，必须自己控制失败处理：
 # 载入后立刻关掉 errexit（与 tests/unit_responsive.sh 同一约定）。
 # 不关的话 render_home 的**合法**返回码 1 会把整个测试静默杀掉——它末行是
@@ -123,7 +132,7 @@ h_join() {
 
 # 渲染一帧首页的**原始**行（保留 ANSI 转义）到 _H_RAW。
 # 与 h_frame 的区别：h_frame 剥掉转义只留可见文本（量宽用），这里要的正是转义本身
-# ——检查选中卡片有没有漏出 48;5; 背景序列。
+# ——检查选中卡片有没有漏出「不属于本主题底色的」背景序列。
 h_frame_raw() {
   local line
   _H_RAW=()
@@ -132,14 +141,33 @@ h_frame_raw() {
   done < <(render_home)
 }
 
-# 帧内出现「48;5;」背景序列的行号串（空 = 无背景色泄漏）。
+# 本主题 UI_BG 的 256 色索引（如 dark 的 233）。UI_BG 形如 $'\033[48;5;233m'。
+# 从 UI_BG 本身反解，不写死数字：换主题后本断言自动跟着走。
+h_ui_bg_index() {
+  local s="${UI_BG#*48;5;}"
+  printf '%s' "${s%%m*}"
+}
+
+# 帧内**所有**出现过的背景色索引（去重、按首次出现顺序）拼成的串。
+#
+# 口径（本轮重写）：整屏铺底之后，帧里合法地满是 `48;5;`——但**只允许本主题 UI_BG 的
+# 那一个索引**。出现任何别的背景索引（无论来自 UI_HL_FG 误用、还是别处的游离背景）都
+# 判为泄漏。原 bug 的形式恰恰就是「一个不属于底色的索引漏在文字区」，所以收窄到
+# 「只准 UI_BG 索引」照样抓得住，不是放宽。
+#
 # 重要：本检查必须在 half/off 图标档位下进行——bg 模式图标**合法地**用背景色铺点阵
 # （lib/icons.sh 的 _icon_render_bg），它自己的 48;5; 会被误报成卡片文字区的泄漏。
 # 颜色泄漏与终端宽度无关，所以调用方把图标单独钉在 half，不跟随 h_set_amb 的档位。
-h_bg_leak() {
-  local i out=""
+h_bg_indices() {
+  local i line idx out=""
   for i in "${!_H_RAW[@]}"; do
-    [[ "${_H_RAW[i]}" == *"48;5;"* ]] && out+="${out:+ }$((i + 1))"
+    line="${_H_RAW[i]}"
+    while [[ "${line}" == *"48;5;"* ]]; do
+      line="${line#*48;5;}"
+      idx="${line%%[!0-9]*}"
+      [[ -z "${idx}" ]] && break
+      [[ " ${out} " == *" ${idx} "* ]] || out+="${out:+ }${idx}"
+    done
   done
   printf '%s' "${out}"
 }
@@ -293,10 +321,13 @@ done
 # 把带背景色的 UI_HL_FG（core_sgr <fg> <bg>，形如 48;5;N）当**纯前景色**用，于是选中卡
 # 右侧 9 列文本区被刷成一块游离蓝底；而档位 A 的描述行又写死 UI_MUTED，那块蓝中间还
 # 破了个 9×5 的洞。修复：选中前景改用不含背景的 UI_SEL。
-# 断言：整帧（档位 A/B 的所有卡片，含被选中的那张）不得出现 48;5; 背景序列。
+# 断言（本轮收窄口径）：整帧（档位 A/B 的所有卡片，含被选中的那张）里出现的**背景索引
+# 只准是本主题 UI_BG 的那一个**。旧口径「一个 48;5; 都不许有」的前提被本轮的整屏铺底
+# 打破了（UI_BG 合法地铺满全帧），故改为「只准底色索引」——原 bug 的游离蓝底正是
+# 「一个不属于底色的索引」，收窄后照样抓得住。
 # 档位 C 本就没碰 UI_HL_FG，一并纳入，防止日后回归。
 for amb in 1 2; do
-  # 单独把图标钉在 half：理由见 h_bg_leak 注释（bg 图标自带合法的 48;5;）。
+  # 单独把图标钉在 half：理由见 h_bg_indices 注释（bg 图标自带合法的 48;5;）。
   BUPTY_AMBIG_W="${amb}"
   export BUPTY_FORCE_ICONS=half
   _ICON_INITIALIZED=""
@@ -308,11 +339,15 @@ for amb in 1 2; do
     _home_layout
     t_begin "选中态无背景泄漏 档位${tier} amb=${amb} cols=${cols}"
     assert_eq "${_HOME_TIER}" "${tier}" "${cols} 列 × ${rows} 行应为档位 ${tier}"
+    # 图例：本主题底色索引（dark=233）——非空且确为数字，否则下面的比对是空的。
+    h_allow="$(h_ui_bg_index)"
+    assert_eq "$(( h_allow > 0 ))" "1" "UI_BG 索引必须能反解出来（否则下一条恒真）"
     for sel in 0 1 5; do
       HOME_FOCUS="grid"
       HOME_SEL="${sel}"
       h_frame_raw
-      assert_eq "$(h_bg_leak)" "" "sel=${sel} 帧内不得出现 48;5;（选中卡背景色泄漏）"
+      assert_eq "$(h_bg_indices)" "${h_allow}" \
+        "sel=${sel} 帧内背景索引只允许 UI_BG(${h_allow})，出现别的即泄漏"
     done
   done
 done

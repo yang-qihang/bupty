@@ -6,7 +6,7 @@ set -euo pipefail
 _TUI_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # 加载核心库。
-for _lib in core settings http session creds parse sjd ucloud public ui icons submit; do
+for _lib in core settings http session creds parse sjd ucloud public ui icons banner submit; do
   # shellcheck disable=SC1090
   source "${_TUI_DIR}/lib/${_lib}.sh"
 done
@@ -129,8 +129,11 @@ _async_poll() {
 # ---------------------------------------------------------------------------
 
 # 顶部标题栏。
+# 首页且大字符块可显示时：1 行状态行（左=页名，右=账号 + ⚙ 设置）+ 6 行居中块。
+# 其余情况（含一切降级路径）：与改动前逐字节相同的 1 行顶栏。
 tui_render_header() {
   local title right gear title_w left_w right_w gear_w avail pad i gap
+  local banner=0 left_prefix left_prefix_w bpad bpadstr
   title="$(ui_view_title "${TUI_VIEW}")"
   if creds_exists 2>/dev/null; then
     right="${BUPTY_ACCOUNT} · 已登录"
@@ -138,17 +141,39 @@ tui_render_header() {
     right="未登录"
   fi
   # 设置从模块级降到顶栏右侧：账号状态之后跟一个 ⚙ 设置 焦点项。
+  # 顶栏**只写名字、不写键位**：直达键（`c`）只在页脚提示里出现，一处说明就够，
+  # 顶栏再挂一个字符会和「⚙ 设置 c」这种半中半英的读法一样碍眼（用户 2026-10-14 定的）。
   gear="⚙ 设置"
-  # 标题与它右侧的内容之间至少留 1 格，绝不能贴在一起（如「首页⚙ 设置」）。
-  gap=1
   # 「 bupty」本身固定占 6 列，再加一个分隔空格。
+  left_prefix=" ${BUPTY_NAME}"
+  left_prefix_w=6
+  # 首页大字符块：块启用时状态行左侧不再重复写 bupty（块里已写 BUPTY），
+  # 让出的 6 列正好留给居中的块。
+  if [[ "${TUI_VIEW}" == "home" ]]; then
+    banner_init
+    banner="${BANNER_ACTIVE}"
+    if (( banner )); then
+      left_prefix=""
+      left_prefix_w=0
+    fi
+  fi
+  # 标题与它右侧的内容之间**希望**留 ≥1 格。
+  # 注意：这只是意图，没有下限保证。pad 在「一切都放得下」的分支里算出来可以是 0
+  # （实测 UI_COLS=25 未登录态：avail = 25-11-6-2 = 6，pad = 6-6 = 0，渲染成
+  # 「 bupty 首页未登录  ⚙ 设置」，首页与未登录贴死）。**这是 HEAD 上就有的既有行为**，
+  # 本分支未引入也未扩大（HEAD 的同一函数条件逐字相同）；要收口需单独一个改动。
+  gap=1
   title_w="$(core_fit_width "${title}")"
-  left_w=$(( 6 + 1 + title_w ))
+  left_w=$(( left_prefix_w + 1 + title_w ))
   right_w="$(core_fit_width "${right}")"
   gear_w="$(core_fit_width "${gear}")"
-  # 连「 bupty」都放不下（现实终端不会出现）：只保留能放下的部分，保证不溢出。
-  if (( UI_COLS < 7 )); then
-    printf '%s\n' "$(ui_paint accent "$(core_fit " ${BUPTY_NAME}" "${UI_COLS}")")"
+  # 连前缀都放不下（现实终端不会出现）：只保留能放下的部分，保证不溢出。
+  if (( UI_COLS < left_prefix_w + 1 )); then
+    if [[ -n "${left_prefix}" ]]; then
+      printf '%s\n' "$(ui_paint accent "$(core_fit "${left_prefix}" "${UI_COLS}")")"
+    else
+      printf '\n'
+    fi
     return 0
   fi
   if (( left_w + right_w + gear_w + 2 > UI_COLS )); then
@@ -165,14 +190,14 @@ tui_render_header() {
       gear_w=0
     fi
     # 标题最多占满让位后剩下的空间（齿轮还在时要先扣掉 gap 与齿轮本身）。
-    avail=$(( UI_COLS - 6 - 1 ))
+    avail=$(( UI_COLS - left_prefix_w - 1 ))
     (( gear_w > 0 )) && avail=$(( avail - gap - gear_w ))
     (( avail < 0 )) && avail=0
     if (( title_w > avail )); then
       title="$(core_fit "${title}" "${avail}")"
       title_w="${avail}"
     fi
-    left_w=$(( 6 + 1 + title_w ))
+    left_w=$(( left_prefix_w + 1 + title_w ))
     pad=$(( UI_COLS - left_w - gear_w ))
     (( pad < 0 )) && pad=0
   else
@@ -184,7 +209,9 @@ tui_render_header() {
       pad=$(( avail - right_w ))
     fi
   fi
-  printf '%s' "$(ui_paint accent " ${BUPTY_NAME}")"
+  if [[ -n "${left_prefix}" ]]; then
+    printf '%s' "$(ui_paint accent "${left_prefix}")"
+  fi
   printf ' %s' "$(ui_paint title "${title}")"
   for ((i = 0; i < pad; i++)); do printf ' '; done
   if [[ -n "${right}" ]]; then
@@ -197,6 +224,24 @@ tui_render_header() {
     printf '%s' "$(ui_paint accent "${gear}")"
   fi
   printf '\n'
+  # 大字符块：整块居中，左位移 (UI_COLS - 47) / 2 向下取整，每行恒 47 列。
+  if (( banner )); then
+    bpad=$(( (UI_COLS - BANNER_W) / 2 ))
+    (( bpad < 0 )) && bpad=0
+    printf -v bpadstr '%*s' "${bpad}" ''
+    banner_render "${UI_ACCENT}"
+    for ((i = 0; i < BANNER_H; i++)); do
+      # banner 行自带裸 \033[0m（lib/banner.sh 的 _BANNER_RESET），会把底色打回终端默认。
+      # 有主题（UI_BG 非空）时把行尾裸 reset 换成 UI_RESET（重置 + 立刻恢复底色），保证帧内
+      # 每个 \033[0m 之后都紧跟 \033[48;5;N m（底色连续不变量），块内空白始终落在主题底色上；
+      # UI_BG 为空时原样输出，与改动前逐字节一致。
+      if [[ -n "${UI_BG}" ]]; then
+        printf '%s%s\n' "${bpadstr}" "${BANNER_ROWS[$i]%$'\033[0m'}${UI_RESET}"
+      else
+        printf '%s%s\n' "${bpadstr}" "${BANNER_ROWS[$i]}"
+      fi
+    done
+  fi
 }
 
 # 视图标题（供顶栏与帮助）。
@@ -227,8 +272,36 @@ tui_render_footer() {
     status="${BUPTY_ERR}"
   fi
   printf ' %s\n' "$(ui_paint muted "$(core_fit "${status:-就绪}" "$((UI_COLS - 2))")")"
-  # 快捷键
-  printf ' %s\n' "$(ui_paint muted "$(core_fit "↑↓ 选择 · Enter 进入 · Esc 返回 · q 退出 · Tab 切换" "$((UI_COLS - 2))")")"
+  # 快捷键提示：默认串 + 页面可选覆盖点。
+  # 覆盖点 footer_hint_<view> 输出非空则替换默认提示串；未定义或输出为空 = 用默认串。
+  # 这样「选择器打开时 Enter 是保存、Esc 是撤销」这类页面级键位语义变化，页脚能说实话。
+  # 注意（原注释写错过，已更正）：钩子本身不给默认路径增加任何一个字节，但**默认串自己
+  # 在本次改动里也变了**（尾部新增 ` · c 设置`，是任务 B 的有意跨站变更），所以
+  # 「不定义钩子的页面输出与改动前逐字节一致」**不成立**——别拿这句话当回归判据。
+  local hint=""
+  if declare -F "footer_hint_${TUI_VIEW}" >/dev/null 2>&1; then
+    hint="$("footer_hint_${TUI_VIEW}")"
+  fi
+  [[ -n "${hint}" ]] || hint="↑↓ 选择 · Enter 进入 · Esc 返回 · q 退出 · Tab 切换 · c 设置"
+  # 窄终端适配：core_fit 按显示列硬切，切在词中间会露出半截字（40 列下
+  # 「q 退出」曾被切成「q 退」）。提示串以 ' · ' 分段，放不下时**从尾部整段整段地丢**，
+  # 直到剩下的能放下；${hint% · *} 连同分隔符一起摘掉，不会留下悬空的 ' ·'。
+  # 兜底：连第一段都超预算时循环自然退出，hint 只剩首段，仍交给 core_fit 硬切
+  # （此时半截字不可避免，但本行宽度与改动前一致）。
+  # 放得下（宽度 ≤ 预算）时循环一次都不进，hint 逐字节不动 → 相对**本次截断改动之前**
+  # 完全相同（相对 HEAD 仍差尾部新增的 ` · c 设置`，见上）。
+  local budget=$((UI_COLS - 2))
+  _core_width "${hint}"
+  if (( _CORE_W > budget )); then
+    while [[ "${hint}" == *" · "* ]]; do
+      hint="${hint% · *}"
+      _core_width "${hint}"
+      # 显式 if（而非 `(( )) && break`）：本函数在 set -e 下运行，写成 if 条件
+      # 不会因「条件为假」被当成失败命令。
+      if (( _CORE_W <= budget )); then break; fi
+    done
+  fi
+  printf ' %s\n' "$(ui_paint muted "$(core_fit "${hint}" "${budget}")")"
 }
 
 # 整屏渲染：标题 + 内容 + 底部。
@@ -236,12 +309,22 @@ tui_render_footer() {
 # 用 \033[2J 全清屏（单次写入、原子更新，不会白闪），彻底清除上一帧残留的文字与高亮底色。
 tui_render() {
   {
+    # 起手先发本主题底色（UI_BG），再擦屏：依赖 BCE（背景色擦除），让 \033[2J 擦出的
+    # 空白本身就带着底色——这是「整屏铺底」的关键一步，缺失则清屏处会露出终端原底色。
+    # UI_BG 为空（尚未应用主题）时 printf 什么都不输出，与改动前逐字节一致。
+    printf '%s' "${UI_BG}"
     printf '\033[2J\033[H'
     tui_render_header
     local i
     for ((i = 0; i < UI_COLS; i++)); do printf '%s' "${_UI_BOX_H}"; done
     printf '\n'
-    render_${TUI_VIEW} || true
+    # 正文可用行数 = UI_ROWS - chrome 行数，唯一的 chrome 口径由 banner_chrome_rows 给出
+    # （首页出块 11、其余 5）。每次渲染都按当前尺寸重算，不缓存。
+    local body
+    banner_chrome_rows
+    body=$(( UI_ROWS - BANNER_CHROME_ROWS ))
+    (( body < 0 )) && body=0
+    render_${TUI_VIEW} "${body}" || true
     tui_render_footer
     printf '\033[J'
   } > "${TUI_FRAME_FILE}"
@@ -291,7 +374,25 @@ tui_main() {
       IGNORE) continue ;;   # 鼠标等被忽略的输入，不重绘。
       q|EOF) tui_quit ;;
       TAB) tui_next_tab ;;
-      ESC|BACKSPACE) tui_back ;;
+      # 设置直达键：`c`（config / 配置）。
+      # 历史：先用过 `,`。逗号是标点，在中文界面里「⚙ 设置 ,」不好看，也容易在
+      # 中英混排里被误读，2026-10-14 按用户要求改成字母。
+      # 为什么不是 `s`（用户首选）：`s` 已被 lib/views/assignments.sh:380 的
+      # `s|ENTER)`（提交作业）占用，而 tui_main 的 case 在视图 handler 之前，
+      # 全局键会把作业页的 `s` 吃掉——不能抢。
+      # 其余被占的单字母：f（空教室）r（各页刷新）t p 1 0（成绩页）。`c` 全空闲。
+      # ui_read_key 对普通字母原样返回 token（lib/ui.sh:595 的 `*)` 分支），无变形。
+      c) tui_switch settings ;;
+      ESC|BACKSPACE)
+        # 页面可选的接管点：handle_<view>_escape 返回 0 = 这次 Esc 已被页面消费（不返回上一页）。
+        # 未定义或返回非 0 = 维持原行为。现有 8 个页面都没定义它，行为与改动前逐字节一致。
+        if declare -F "handle_${TUI_VIEW}_escape" >/dev/null 2>&1 \
+           && "handle_${TUI_VIEW}_escape"; then
+          :
+        else
+          tui_back
+        fi
+        ;;
       *)
         if declare -F "handle_${TUI_VIEW}_key" >/dev/null 2>&1; then
           # 视图 handler 失败（如刷新失败）不应在 set -e 下终止整个 TUI。
