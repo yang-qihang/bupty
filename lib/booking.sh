@@ -647,6 +647,8 @@ booking_pending_save() {
 # 追加一条待抢约。
 booking_pending_add() {
   local item="$1" list
+  # 防御：压缩成单行，避免多行 JSON 被 settings_set_array 按换行拆碎。
+  item="$(printf '%s' "${item}" | tr -d '\n\r')"
   list="$(booking_pending_list)"
   if [[ -n "${list}" ]]; then
     booking_pending_save "${list}"$'\n'"${item}"

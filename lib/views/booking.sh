@@ -688,7 +688,7 @@ _booking_do_autobook() {
   fi
 
   local pending_item
-  pending_item="$(jq -n --arg dev "${dev_id}" --arg lab "${lab_ids}" \
+  pending_item="$(jq -c -n --arg dev "${dev_id}" --arg lab "${lab_ids}" \
     --arg b "${BOOKING_FORM_BEGIN}" --arg e "${BOOKING_FORM_END}" \
     --arg tn "${BOOKING_FORM_TESTNAME}" --arg mem "${BOOKING_FORM_MEMBERS}" \
     --arg kind "${BOOKING_FORM_KIND}" --arg now "$(core_now_rfc3339)" \

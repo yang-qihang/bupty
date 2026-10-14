@@ -188,4 +188,12 @@ assert_eq "$(_booking_pending_n "$(booking_pending_list)")" "1" "删除第一条
 remaining="$(booking_pending_list)"
 assert_eq "$(printf '%s' "${remaining}" | jq -r '.devId')" "100651195" "剩余为第二条"
 
+t_begin "待抢约：多行 JSON 自动压缩为单条（防拆碎）"
+booking_pending_save ""
+booking_pending_add '{ "devId": "100888915",
+  "begin": "2026-10-15 08:00",
+  "end": "2026-10-15 08:30" }'
+assert_eq "$(_booking_pending_n "$(booking_pending_list)")" "1" "多行 item 压缩为一条而非拆成多行"
+assert_eq "$(printf '%s' "$(booking_pending_list)" | jq -r '.devId')" "100888915" "压缩后仍为合法 JSON 可解析"
+
 t_summary
