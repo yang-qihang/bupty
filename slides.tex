@@ -168,38 +168,63 @@
   \end{columns}
 \end{frame}
 
-\begin{frame}{数据如何流动：JSON 一条道走到底}
+\begin{frame}[fragile]{数据如何流动：JSON 一条道走到底}
   \begin{itemize}
-    \setlength\itemsep{0.7em}
-    \item \textbf{JSON} 是一种通用的「文本格式」，用键值对表示数据，例如 \texttt{\{"name":"张三","age":20\}}。
-    \item 我们规定：各模块之间传数据，一律用 \textbf{JSON 字符串}，读写都用命令行工具 \texttt{jq} 完成。
+    \setlength\itemsep{0.5em}
+    \item \textbf{JSON} 是一种通用的文本格式，用键值对表示数据。各模块之间一律用 JSON 字符串传数据，用命令行工具 \texttt{jq} 读写。
     \item 好处：模块之间只约定「字段名」，不约定「分隔符」，不会因为数据里碰巧出现分隔符而出错。
-    \item 页面显示前，先用 \texttt{jq} 把数据做一次「预计算」整理成一行行的文本；真正逐行画界面时只用 Bash 本身，不再反复调用 \texttt{jq}，因此更快。
-    \item 链路：网络模块 $\xrightarrow{\texttt{JSON}}$ 页面预计算 $\xrightarrow{\texttt{一行行文本}}$ 渲染。
+    \item 页面显示前先做一次「预计算」，把 JSON 整理成一行行文本；真正逐行画界面时只用 Bash 本身，不再反复调用 \texttt{jq}。
   \end{itemize}
+  {\footnotesize
+  \begin{verbatim}
+  # 网络模块返回的 JSON
+  {"devId":100888915, "devName":"研讨间314", "free":[{"start":"08:00","end":"11:30"}]}
+
+  # 预计算成一行文本，渲染时直接读
+  100888915  研讨间314  08:00-11:30
+  \end{verbatim}
+  }
 \end{frame}
 
-\begin{frame}{异步加载：界面始终不「卡住」}
+\begin{frame}[fragile]{异步加载：界面始终不「卡住」}
   \begin{itemize}
-    \setlength\itemsep{0.7em}
-    \item 传统做法：进入页面 → 联网取数据 → 数据到了才显示。网络慢时，界面会空白或卡住。
+    \setlength\itemsep{0.5em}
+    \item 传统做法：进入页面 → 联网取数据 → 数据到了才显示，网络慢时界面会空白或卡住。
     \item 我们的做法：进入页面后 \textbf{立刻}画出界面框架和「正在加载…」提示，数据在后台悄悄下载，下载完成后自动刷新。
-    \item 实现上：用后台子进程去联网（\texttt{\_async\_start}），主循环每隔一小段时间检查一次是否完成（\texttt{\_async\_poll}），完成就更新页面。
+  \end{itemize}
+  {\footnotesize
+  \begin{verbatim}
+  # 进入页面：在后台子进程里拉取，不阻塞界面
+  _async_start schedule sjd_fetch_schedule "$acc" "$pwd"
+
+  # 主循环每隔一小段时间检查一次，完成了就刷新
+  if _async_poll; then tui_render; fi
+  \end{verbatim}
+  }
+  \begin{itemize}
     \item 渲染用「帧缓冲」：整屏内容先画到临时文件里，再一次性输出到终端，避免一行一行刷出来导致的闪烁。
   \end{itemize}
 \end{frame}
 
-\begin{frame}{渲染性能：去掉多余的「子进程」}
+\begin{frame}[fragile]{渲染性能：去掉多余的「子进程」}
   \begin{itemize}
-    \setlength\itemsep{0.7em}
+    \setlength\itemsep{0.5em}
     \item Bash 里很多写法（比如 \texttt{\$(命令)}、管道）都会额外启动一个「子进程」，每启动一次都要花一点时间。
     \item 如果一个页面有几十上百行，每行都启动几次子进程，界面就会明显变慢。
-    \item 我们的优化：
-      \begin{itemize}
-        \item 渲染循环里改用 Bash 内置的运算，尽量不启动子进程；
-        \item 截断超长文字时只从头到尾扫一遍（中文按 2 列、英文按 1 列累计宽度），不反复重数。
-        \item 凭据、活动过滤、班车显示行等只算一次并缓存。
-      \end{itemize}
+  \end{itemize}
+  {\footnotesize
+  \begin{verbatim}
+  # 慢：每条都额外启动一个子进程
+  fitted="$(core_fit "$cell" "$cw")"
+
+  # 快：用 Bash 内置运算，结果直接写进变量
+  _core_fit_compute "$cell" "$cw"
+  fitted="$_CORE_FIT_OUT"
+  \end{verbatim}
+  }
+  \begin{itemize}
+    \setlength\itemsep{0.5em}
+    \item 其它优化：截断超长文字只扫一遍；凭据、活动过滤、班车显示行等只算一次并缓存。
     \item 效果：课表、班车等页面从约 200ms 一帧降到约 10--30ms 一帧。
   \end{itemize}
 \end{frame}
