@@ -86,8 +86,8 @@
   \begin{center}
     \begin{tikzpicture}[
         font=\small,
-        node distance=0.7cm and 0.5cm,
-        box/.style={draw, rounded corners=2pt, align=center, fill=blue!6, minimum height=0.9cm},
+        node distance=0.45cm and 0.5cm,
+        box/.style={draw, rounded corners=2pt, align=center, fill=blue!6, minimum height=0.72cm},
         arr/.style={-{Stealth}, thick, gray}]
       \node[box, fill=orange!12] (bin) {bin/bupty（入口 + 后台模式）};
       \node[box, below=of bin, fill=green!8] (tui) {tui.sh（主事件循环 · 导航栈 · 异步拉取）};
@@ -108,10 +108,7 @@
     \setlength\itemsep{0.6em}
     \item 各网络模块统一输出 \textbf{JSON 字符串}（用 \texttt{jq} 生成 / 消费），模块间不拼接脆弱的分隔符。
     \item 视图层先做一次 \texttt{jq} \textbf{预计算}（TSV 行缓存），渲染循环内用纯 Bash 读取，不再反复调用 \texttt{jq}。
-    \item 典型链路：
-      \[
-      \text{网络模块} \xrightarrow{\ \texttt{JSON}\ } \text{视图预计算} \xrightarrow{\ \texttt{TSV}\ } \text{逐行渲染}
-      \]
+    \item 典型链路：网络模块 $\xrightarrow{\texttt{JSON}}$ 视图预计算 $\xrightarrow{\texttt{TSV}}$ 逐行渲染。
   \end{itemize}
 \end{frame}
 
