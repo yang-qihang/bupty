@@ -571,33 +571,34 @@ _booking_collect_request() {
     members_csv="${self_acc}"
   fi
 
-  # 4. 开始时间（步进 interval，保证能放下最少时长）。
+  # 4. 开始时间（文本输入 + 校验，避免列出上百个时刻）。
   local slot_start_min slot_end_min
   slot_start_min="$(_booking_hm_to_min "${slot_start}")"
   slot_end_min="$(_booking_hm_to_min "${slot_end}")"
-  local -a start_opts=()
-  local t
-  for ((t = slot_start_min; t + minr <= slot_end_min; t += interval)); do
-    start_opts+=("$(_booking_min_to_hm "${t}")|$(_booking_min_to_hm "${t}")")
-  done
-  if (( ${#start_opts[@]} == 0 )); then core_err "该时段长度不足，无法预约。"; return 1; fi
-  if ! ui_select_option "${start_opts[@]}"; then core_err "已取消预约。"; return 1; fi
+  if ! ui_input "开始时间 HH:MM（${slot_start}~${slot_end}，步进${interval}分钟）： " "${slot_start}" 0 5; then core_err "已取消预约。"; return 1; fi
   local start_hm start_min
-  start_hm="${UI_SELECT_RESULT}"
-  start_min="$(_booking_hm_to_min "${start_hm}")"
+  start_hm="$(core_trim "${UI_INPUT_RESULT}")"
+  if [[ ! "${start_hm}" =~ ^([0-9]{1,2}):([0-9]{2})$ ]]; then
+    core_err "开始时间格式应为 HH:MM（如 14:30）。"
+    return 1
+  fi
+  local sh="${BASH_REMATCH[1]}" sm="${BASH_REMATCH[2]}"
+  if (( 10#${sh} > 23 || 10#${sm} > 59 )); then core_err "开始时间无效。"; return 1; fi
+  start_min=$(( 10#${sh} * 60 + 10#${sm} ))
+  if (( start_min < slot_start_min )); then core_err "开始时间不能早于 ${slot_start}。"; return 1; fi
+  if (( start_min + minr > slot_end_min )); then core_err "开始时间过晚，放不下最短时长。"; return 1; fi
+  if (( (start_min - slot_start_min) % interval != 0 )); then core_err "开始时间需按 ${interval} 分钟步进对齐。"; return 1; fi
 
-  # 5. 时长（minResvTime..maxResvTime，步进 interval，且不超过时段末尾）。
-  local -a dur_opts=()
-  local d maxd
+  # 5. 时长（文本输入 + 校验）。
+  local dur maxd
   maxd="${maxr}"
   if (( start_min + maxd > slot_end_min )); then maxd=$(( slot_end_min - start_min )); fi
-  for ((d = minr; d <= maxd; d += interval)); do
-    dur_opts+=("${d}|${d} 分钟")
-  done
-  if (( ${#dur_opts[@]} == 0 )); then core_err "无法选择时长。"; return 1; fi
-  if ! ui_select_option "${dur_opts[@]}"; then core_err "已取消预约。"; return 1; fi
-  local dur end_min
-  dur="${UI_SELECT_RESULT}"
+  if ! ui_input "时长（分钟，${minr}~${maxd}，步进${interval}）： " "${minr}" 0 3; then core_err "已取消预约。"; return 1; fi
+  dur="$(core_trim "${UI_INPUT_RESULT}")"
+  if [[ ! "${dur}" =~ ^[0-9]+$ ]]; then core_err "时长应为整数分钟。"; return 1; fi
+  if (( dur < minr || dur > maxd )); then core_err "时长应在 ${minr}~${maxd} 分钟之间。"; return 1; fi
+  if (( dur % interval != 0 )); then core_err "时长需按 ${interval} 分钟步进对齐。"; return 1; fi
+  local end_min
   end_min=$(( start_min + dur ))
 
   BOOKING_FORM_BEGIN="${date} ${start_hm}"
