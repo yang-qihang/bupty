@@ -461,8 +461,8 @@ _booking_render_pending() {
     [[ -z "${item}" ]] && continue
     begin="$(printf '%s' "${item}" | jq -r '.begin // ""' 2>/dev/null || true)"
     end="$(printf '%s' "${item}" | jq -r '.end // ""' 2>/dev/null || true)"
-    dev="$(printf '%s' "${item}" | jq -r '.devId // ""' 2>/dev/null || true)"
-    line="${begin} ~ ${end} · 房间 ${dev}"
+    dev="$(printf '%s' "${item}" | jq -r '.devName // .devId // ""' 2>/dev/null || true)"
+    line="${begin} ~ ${end} · ${dev}"
     if (( i == BOOKING_PENDING_SEL )); then
       _core_fit_compute "${line}" "$((UI_COLS - 4))"
       printf ' %s› %s%s\n' "${UI_HL_FG}" "${_CORE_FIT_OUT}" "${UI_RESET}"
@@ -659,8 +659,9 @@ _booking_do_autobook() {
   local room
   room="$(_booking_selected_room)"
   [[ -z "${room}" || "${room}" == "null" ]] && { core_err "请先选择房间。"; return 1; }
-  local dev_id minu maxu interval minr maxr lab_ids
+  local dev_id dev_name minu maxu interval minr maxr lab_ids
   dev_id="$(printf '%s' "${room}" | jq -r '.devId // empty' 2>/dev/null || true)"
+  dev_name="$(printf '%s' "${room}" | jq -r '.devName // .roomName // ""' 2>/dev/null || true)"
   minu="$(printf '%s' "${room}" | jq -r '.minUser // 1' 2>/dev/null || true)"
   maxu="$(printf '%s' "${room}" | jq -r '.maxUser // 1' 2>/dev/null || true)"
   interval="$(printf '%s' "${room}" | jq -r '.timeInterval // 30' 2>/dev/null || true)"
@@ -687,15 +688,27 @@ _booking_do_autobook() {
     return 1
   fi
 
+  # 3. 立即尝试预约（明天/今天已放出的时段可当场成功）；失败则登记待抢约，后台持续尝试。
+  local submit_err
+  tui_set_status "正在尝试预约…"
+  tui_render
+  if booking_submit "${dev_id}" "${BOOKING_FORM_BEGIN}" "${BOOKING_FORM_END}" "${BOOKING_FORM_TESTNAME}" "${BOOKING_FORM_MEMBERS}" "${BOOKING_FORM_KIND}" >/dev/null; then
+    tui_set_status "预约成功。"
+    BOOKING_OWN=""
+    BOOKING_OWN_LOADED=0
+    return 0
+  fi
+  submit_err="${BUPTY_ERR:-未知错误}"
+
   local pending_item
-  pending_item="$(jq -c -n --arg dev "${dev_id}" --arg lab "${lab_ids}" \
+  pending_item="$(jq -c -n --arg dev "${dev_id}" --arg dn "${dev_name}" --arg lab "${lab_ids}" \
     --arg b "${BOOKING_FORM_BEGIN}" --arg e "${BOOKING_FORM_END}" \
     --arg tn "${BOOKING_FORM_TESTNAME}" --arg mem "${BOOKING_FORM_MEMBERS}" \
     --arg kind "${BOOKING_FORM_KIND}" --arg now "$(core_now_rfc3339)" \
-    '{devId:$dev, labIds:$lab, begin:$b, end:$e, testName:$tn, member_accnos_csv:$mem, member_kind:$kind, created_at:$now}')"
+    '{devId:$dev, devName:$dn, labIds:$lab, begin:$b, end:$e, testName:$tn, member_accnos_csv:$mem, member_kind:$kind, created_at:$now}')"
   booking_pending_add "${pending_item}"
   BOOKING_PENDING_LOADED=0
-  tui_set_status "已登记自动抢约（${target_date}），后台将在时段放出时自动下单。"
+  tui_set_status "当前无法预约（${submit_err}），已登记待抢约，后台将持续尝试。"
   return 0
 }
 
