@@ -1,4 +1,4 @@
-# BUPT 研修间预约协议（order.bupt.edu.cn）
+# BUPT 研讨间预约协议（order.bupt.edu.cn）
 
 > 来源：`order.bupt.edu.cn` 前端静态分析 + 用户授权（学号 2025211681）的真实登录 / 预约 / 取消实测。
 > 所有请求均以 `https://order.bupt.edu.cn/ic-web` 为 base（`window.g.ApiUrl = '/ic-web'`，见 `config/config.js`，`loginMode: 2` = CAS 认证登录）。
@@ -47,7 +47,7 @@
 
 ### 2.1 分类（kind/lab）与「最少人数」
 
-`GET /ic-web/roomMenu`（token 头即可）返回研修间分类树（西土城/沙河两个校区）。第二层节点的 `id` 就是**预约列表接口的 `labIds` 参数**（因为本部署 `spaceListType=2`）。
+`GET /ic-web/roomMenu`（token 头即可）返回研讨间分类树（西土城/沙河两个校区）。第二层节点的 `id` 就是**预约列表接口的 `labIds` 参数**（因为本部署 `spaceListType=2`）。
 
 实测分类与人数下限（`minUser` / `maxUser`）：
 
@@ -85,7 +85,7 @@
   "openTimes": [ { "openStartTime": "08:00", "openEndTime": "22:00", "openLimit": 1 } ],
   "resvRule": {
      "ruleName": "朗读亭预约规则（沙河）",
-     "classKind": 1,            // 1=研修间
+     "classKind": 1,            // 1=研讨间
      "minResvTime": 10,         // 最少预约时长（分钟）
      "maxResvTime": 30,         // 最多预约时长（分钟）；研讨间=120
      "earliestResvTime": 5760,  // 最早可提前多少分钟预约（朗读亭=4天，研讨间=2160=1.5天）
@@ -133,14 +133,14 @@
 
 ```jsonc
 {
-  "sysKind": 1,                    // 1=研修间（朗读亭/研讨间都是 1）
+  "sysKind": 1,                    // 1=研讨间（朗读亭/研讨间都是 1）
   "appAccNo": 100000001,           // 发起人 accNo（= auth/userInfo 的 accNo）
   "memberKind": 1,                 // 1=仅本人；2=带成员（>1 人时）
   "resvBeginTime": "2026-10-14 14:00:00",
   "resvEndTime":   "2026-10-14 14:30:00",
   "testName": "科研讨论",           // 主题，必填（可选值见 3.6）
   "resvKind": 2,                   // 前端固定 2
-  "resvProperty": 0,               // 研修间固定 0
+  "resvProperty": 0,               // 研讨间固定 0
   "appUrl": "",                    // 附件/链接（通常空）
   "resvMember": [100000001],       // accNo 数组；多人 = [本人accNo, 他人accNo, ...]
   "resvDev": [100888915],          // devId 数组
@@ -182,7 +182,7 @@
 - `needStatus`：前端默认 `2+4=6`（= 待履约+已预约）。要「全部」可给更大掩码（如 `2|4|256|128|...`）。
 - 返回 `data` = 预约数组（含 `uuid`、`resvId`、`resvStatus`、`resvBeginTime/EndTime`、`resvDevInfoList[0].devName`、`resvMemberInfoList[]`、`memberKind`），`count` = 总数。
 
-> 任务提示里的 `/borrow/reserve/own` 是「外借设备」的列表（参数 `page/pageSize`），**不是**研修间的列表。研修间「我的预约」用 `reserve/resvInfo`。
+> 任务提示里的 `/borrow/reserve/own` 是「外借设备」的列表（参数 `page/pageSize`），**不是**研讨间的列表。研讨间「我的预约」用 `reserve/resvInfo`。
 
 ### 3.8 预约计数 `reserve/count`（GET）
 
@@ -190,7 +190,7 @@
 
 ### 3.9 违约/禁用名单 `reserve/punishInfo`（GET）
 
-`GET /ic-web/reserve/punishInfo` → `data` = 数组，每项 `{classKind, ...}`（被禁用的系统类别，1=研修间）。空数组 = 无违约/未禁用。前端登录后拉取并展示“禁用”提示条；**真正拦截在预约接口**——被禁用时预约 POST 会直接返回业务错误（`code!=0`，message 为服务器给的提示，前端原样 `$message.error(t.message)` 展示）。
+`GET /ic-web/reserve/punishInfo` → `data` = 数组，每项 `{classKind, ...}`（被禁用的系统类别，1=研讨间）。空数组 = 无违约/未禁用。前端登录后拉取并展示“禁用”提示条；**真正拦截在预约接口**——被禁用时预约 POST 会直接返回业务错误（`code!=0`，message 为服务器给的提示，前端原样 `$message.error(t.message)` 展示）。
 
 ---
 
@@ -204,7 +204,7 @@
 {"code":1,"message":"不能连续预约","data":null,"count":0,"vals":null}
 ```
 
-即：**研修间同一用户同时只能持有 1 个预约**（“one advance slot per self-booking”）。先取消再约即可。
+即：**研讨间同一用户同时只能持有 1 个预约**（“one advance slot per self-booking”）。先取消再约即可。
 
 ### 4.2 违约 / no-show 禁用
 
@@ -220,11 +220,11 @@
 
 ## 5. 备用/未完全逆向的接口（前端 JS 已定义）
 
-这些接口在 `chunk-d5f0defc` 的 API 模块里都有定义，但不是研修间主流程，本任务未逐个用真实参数跑通：
+这些接口在 `chunk-d5f0defc` 的 API 模块里都有定义，但不是研讨间主流程，本任务未逐个用真实参数跑通：
 
 | 方法 | 路径 | 用途（静态分析） |
 |---|---|---|
-| GET | `/ic-web/reserve/entrance` | 研修间入口列表（本部署实测任意参数均 `code:500`，疑似移动端/旧路径） |
+| GET | `/ic-web/reserve/entrance` | 研讨间入口列表（本部署实测任意参数均 `code:500`，疑似移动端/旧路径） |
 | POST | `/ic-web/reserve/entrance/save` | 入口保存 |
 | POST | `/ic-web/reserve/time/expand` | 展开可用时段（分段；本部署返回「请选择相应的数据」） |
 | GET | `/ic-web/reserve/time/expand/duration` | 时段时长展开（返回「请求参数缺失」） |

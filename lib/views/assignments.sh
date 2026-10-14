@@ -150,7 +150,7 @@ _assignments_render_row() {
   raw+=" ${_CORE_FIT_OUT} ${status}"
 
   if [[ "${i}" -eq "${ASSIGNMENTS_SEL}" ]]; then
-    _core_fit_compute "${raw}" "$((UI_COLS - 4))"
+    _core_fit_compute "${raw}" "$((UI_COLS - 1))"
     printf ' %s%s%s\n' "${UI_HL}" "${_CORE_FIT_OUT}" "${UI_RESET}"
   else
     case "${color}" in
@@ -166,7 +166,21 @@ _assignments_render_row() {
 }
 
 # 渲染列表主体（含顶部账号/总数信息行）。
+# body = 正文可用行数（tui_render 已按 chrome 唯一口径算好并传入，不再自己减常量）。
+# 本页固定占 2 行（表头空行 + 信息行），列表可见行数 = body - 2。
+# F=2 是实测值：列表只放 1 条、UI_ROWS=1000 时正文总行数 3，减 1 条列表行即得。
 _assignments_render_list() {
+  local body="${1:-}"
+  if [[ -z "${body}" ]]; then
+    if declare -F banner_chrome_rows >/dev/null 2>&1; then
+      banner_chrome_rows assignments
+      body=$(( UI_ROWS - BANNER_CHROME_ROWS ))
+    else
+      # banner.sh 未加载（单独 source 本文件）时的兜底：非首页 chrome 恒为 5。
+      body=$(( ${UI_ROWS:-24} - 5 ))
+    fi
+  fi
+  (( body < 0 )) && body=0
   local total
   total="$(_assignments_count)"
   printf '\n'
@@ -196,8 +210,9 @@ _assignments_render_list() {
     readarray -t _ASSIGNMENTS_COLORS <<< "${ASSIGNMENTS_COLORS}"
   fi
 
-  local visible=$((UI_ROWS - 8))
-  if (( visible < 5 )); then visible=5; fi
+  # 列表可见行 = 正文预算 - 本页固定 2 行；极小窗口下至少留 1 行（宁少不空）。
+  local visible=$(( body - 2 ))
+  if (( visible < 1 )); then visible=1; fi
   if (( ASSIGNMENTS_SEL >= total )); then ASSIGNMENTS_SEL=$((total - 1)); fi
   if (( ASSIGNMENTS_SEL < 0 )); then ASSIGNMENTS_SEL=0; fi
   local offset="${ASSIGNMENTS_OFFSET:-0}"
@@ -213,9 +228,20 @@ _assignments_render_list() {
 }
 
 # 进入视图渲染。首次进入同步拉取（短暂阻塞），随后渲染列表或错误。
+# body = 正文可用行数，由 tui_render 传入；直接调用（测试）时按唯一口径自行推导。
 render_assignments() {
+  local body="${1:-}"
+  if [[ -z "${body}" ]]; then
+    if declare -F banner_chrome_rows >/dev/null 2>&1; then
+      banner_chrome_rows assignments
+      body=$(( UI_ROWS - BANNER_CHROME_ROWS ))
+    else
+      body=$(( ${UI_ROWS:-24} - 5 ))
+    fi
+  fi
+  (( body < 0 )) && body=0
   if ! creds_load; then
-    printf '\n %s\n' "$(ui_paint muted '  请先在设置中登录。')"
+    printf '\n %s\n' "$(ui_paint muted "$(core_clip '  请先在设置中登录。' "$((UI_COLS - 1))")")"
     return 0
   fi
   if _assignments_stale; then
@@ -231,7 +257,7 @@ render_assignments() {
   if [[ -z "${ASSIGNMENTS_DATA}" ]]; then
     printf '\n %s\n' "$(ui_paint muted '  正在加载作业…')"
   else
-    _assignments_render_list
+    _assignments_render_list "${body}"
   fi
 }
 
@@ -333,7 +359,8 @@ _assignments_submit_flow() {
 
   # 清屏展示提交对话框（说明用多行彩色，避免单行长文本换行/重复）。
   ui_clear
-  tui_render_header
+  # 模态对话框的抬头：只用状态行，不画大字符块（旧 tui_render_header 在非首页本就只出这一行）。
+  tui_render_statusline
   local target=""
   target="【${course}】${title}"
   [[ -n "${deadline}" ]] && target+="（截止 ${deadline}）"

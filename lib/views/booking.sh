@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# views/booking.sh —— 研修间预约视图：分类 → 房间 → 空闲时段 → 预约/登记抢约；我的预约；待抢约。
+# views/booking.sh —— 研讨间预约视图：分类 → 房间 → 空闲时段 → 预约/登记抢约；我的预约；待抢约。
 
 set -euo pipefail
 
@@ -211,22 +211,29 @@ _booking_render_category_row() {
   [[ -z "${row}" ]] && return 0
   local name="${row#*$'\x1f'}"
   if (( i == BOOKING_SEL_CAT )); then
-    _core_fit_compute "${name}" "$((UI_COLS - 4))"
+    _core_fit_compute "${name}" "$((UI_COLS - 3))"
     printf ' %s› %s%s\n' "${UI_HL_FG}" "${_CORE_FIT_OUT}" "${UI_RESET}"
   else
-    _core_fit_compute "${name}" "$((UI_COLS - 6))"
+    _core_fit_compute "${name}" "$((UI_COLS - 3))"
     printf '   %s\n' "${_CORE_FIT_OUT}"
   fi
 }
 
+# 分类列表。body = 正文可用行数；本页固定 5 行（正文空行 + 切页条 + 标题「研讨间」+
+# 提示行 + 空行），F=5 是实测值（列表只放 1 条、UI_ROWS=1000 时正文 6 行）。
 _booking_render_categories() {
+  local body="${1:-}"
+  if [[ -z "${body}" ]]; then
+    body=$(( ${UI_ROWS:-24} - ${BANNER_CHROME_ROWS:-5} ))
+  fi
+  (( body < 0 )) && body=0
   if [[ -z "${BOOKING_CATEGORIES}" ]]; then
     if [[ -n "${TUI_FETCH_PID}" && "${BOOKING_FETCH_KIND}" == "categories" ]]; then
-      printf ' %s\n' "$(ui_paint muted '  正在加载分类…')"
+      printf ' %s\n' "$(ui_paint muted "$(core_clip '  正在加载分类…' "$((UI_COLS - 1))")")"
     elif [[ -n "${BUPTY_ERR}" ]]; then
-      printf ' %s\n' "$(ui_paint danger '  分类加载失败，请查看底部错误信息。')"
+      printf ' %s\n' "$(ui_paint danger "$(core_clip '  分类加载失败，请查看底部错误信息。' "$((UI_COLS - 1))")")"
     else
-      printf ' %s\n' "$(ui_paint muted '  暂无分类数据 · 按 r 刷新')"
+      printf ' %s\n' "$(ui_paint muted "$(core_clip '  暂无分类数据 · 按 r 刷新' "$((UI_COLS - 1))")")"
     fi
     return 0
   fi
@@ -236,8 +243,8 @@ _booking_render_categories() {
   total="$(_booking_categories_count)"
   (( BOOKING_SEL_CAT >= total )) && BOOKING_SEL_CAT=$(( total - 1 ))
   (( BOOKING_SEL_CAT < 0 )) && BOOKING_SEL_CAT=0
-  local visible=$(( UI_ROWS - 9 ))
-  if (( visible < 4 )); then visible=4; fi
+  local visible=$(( body - 5 ))
+  if (( visible < 1 )); then visible=1; fi
   local end=$total
   if (( end > visible )); then end=$visible; fi
   local offset=0
@@ -267,22 +274,29 @@ _booking_render_room_row() {
   cm="${rest#*$'\x1f'}"
   local line="${name} · 最少${minu}人/最多${maxu}人 · 今天${ct}段 明天${cm}段"
   if (( i == BOOKING_SEL_ROOM )); then
-    _core_fit_compute "${line}" "$((UI_COLS - 4))"
+    _core_fit_compute "${line}" "$((UI_COLS - 3))"
     printf ' %s› %s%s\n' "${UI_HL_FG}" "${_CORE_FIT_OUT}" "${UI_RESET}"
   else
-    _core_fit_compute "${line}" "$((UI_COLS - 6))"
+    _core_fit_compute "${line}" "$((UI_COLS - 3))"
     printf '   %s\n' "${_CORE_FIT_OUT}"
   fi
 }
 
+# 房间列表。body = 正文可用行数；本页固定 5 行（同分类页：正文空行 + 切页条 +
+# 标题 + 信息行 + 空行），F=5（实测同上）。
 _booking_render_rooms() {
+  local body="${1:-}"
+  if [[ -z "${body}" ]]; then
+    body=$(( ${UI_ROWS:-24} - ${BANNER_CHROME_ROWS:-5} ))
+  fi
+  (( body < 0 )) && body=0
   if [[ -z "${BOOKING_ROOMS_DATA}" ]]; then
     if [[ -n "${TUI_FETCH_PID}" && "${BOOKING_FETCH_KIND}" == "rooms" ]]; then
-      printf ' %s\n' "$(ui_paint muted '  正在加载房间…')"
+      printf ' %s\n' "$(ui_paint muted "$(core_clip '  正在加载房间…' "$((UI_COLS - 1))")")"
     elif [[ -n "${BUPTY_ERR}" ]]; then
-      printf ' %s\n' "$(ui_paint danger '  房间加载失败，请查看底部错误信息。')"
+      printf ' %s\n' "$(ui_paint danger "$(core_clip '  房间加载失败，请查看底部错误信息。' "$((UI_COLS - 1))")")"
     else
-      printf ' %s\n' "$(ui_paint muted '  暂无房间数据。')"
+      printf ' %s\n' "$(ui_paint muted "$(core_clip '  暂无房间数据。' "$((UI_COLS - 1))")")"
     fi
     return 0
   fi
@@ -293,13 +307,13 @@ _booking_render_rooms() {
   local total i
   total="$(_booking_rooms_count)"
   if (( total == 0 )); then
-    printf ' %s\n' "$(ui_paint muted '  该分类暂无房间。')"
+    printf ' %s\n' "$(ui_paint muted "$(core_clip '  该分类暂无房间。' "$((UI_COLS - 1))")")"
     return 0
   fi
   (( BOOKING_SEL_ROOM >= total )) && BOOKING_SEL_ROOM=$(( total - 1 ))
   (( BOOKING_SEL_ROOM < 0 )) && BOOKING_SEL_ROOM=0
-  local visible=$(( UI_ROWS - 9 ))
-  if (( visible < 4 )); then visible=4; fi
+  local visible=$(( body - 5 ))
+  if (( visible < 1 )); then visible=1; fi
   local end=$total
   if (( end > visible )); then end=$visible; fi
   local offset=0
@@ -325,19 +339,26 @@ _booking_render_slot_row() {
   end="$(printf '%s' "${slot}" | jq -r '.end // ""' 2>/dev/null || true)"
   line="${start}-${end}"
   if (( i == BOOKING_SEL_SLOT )); then
-    _core_fit_compute "${line}" "$((UI_COLS - 4))"
+    _core_fit_compute "${line}" "$((UI_COLS - 3))"
     printf ' %s› %s%s\n' "${UI_HL_FG}" "${_CORE_FIT_OUT}" "${UI_RESET}"
   else
-    _core_fit_compute "${line}" "$((UI_COLS - 6))"
+    _core_fit_compute "${line}" "$((UI_COLS - 3))"
     printf '   %s\n' "${_CORE_FIT_OUT}"
   fi
 }
 
+# 房间详情（空闲时段 + 操作）。body = 正文可用行数；本页固定 6 行（正文空行 + 切页条 +
+# 标题 + 键位提示 + 空行…共 6），F=6（实测：列表只放 1 条、UI_ROWS=1000 时正文 7 行）。
 _booking_render_room() {
+  local body="${1:-}"
+  if [[ -z "${body}" ]]; then
+    body=$(( ${UI_ROWS:-24} - ${BANNER_CHROME_ROWS:-5} ))
+  fi
+  (( body < 0 )) && body=0
   local room
   room="$(_booking_selected_room)"
   if [[ -z "${room}" || "${room}" == "null" ]]; then
-    printf ' %s\n' "$(ui_paint muted '  请先选择房间。')"
+    printf ' %s\n' "$(ui_paint muted "$(core_clip '  请先选择房间。' "$((UI_COLS - 1))")")"
     return 0
   fi
   local devname minu maxu date
@@ -353,13 +374,13 @@ _booking_render_room() {
   local total i
   total="$(_booking_slots_count)"
   if (( total == 0 )); then
-    printf ' %s\n' "$(ui_paint muted '  该日期暂无空闲时段。')"
+    printf ' %s\n' "$(ui_paint muted "$(core_clip '  该日期暂无空闲时段。' "$((UI_COLS - 1))")")"
     return 0
   fi
   (( BOOKING_SEL_SLOT >= total )) && BOOKING_SEL_SLOT=$(( total - 1 ))
   (( BOOKING_SEL_SLOT < 0 )) && BOOKING_SEL_SLOT=0
-  local visible=$(( UI_ROWS - 11 ))
-  if (( visible < 4 )); then visible=4; fi
+  local visible=$(( body - 6 ))
+  if (( visible < 1 )); then visible=1; fi
   local end=$total
   if (( end > visible )); then end=$visible; fi
   local offset=0
@@ -369,14 +390,21 @@ _booking_render_room() {
   done
 }
 
+# 浏览子页分发。body = 正文可用行数（render_booking 传下来；tests/snapshot.sh 直接调用
+# 本函数，故缺省时按唯一口径自行推导）。
 _booking_render_browse() {
-  printf ' %s\n' "$(ui_paint title '研修间')"
+  local body="${1:-}"
+  if [[ -z "${body}" ]]; then
+    body=$(( ${UI_ROWS:-24} - ${BANNER_CHROME_ROWS:-5} ))
+  fi
+  (( body < 0 )) && body=0
+  printf ' %s\n' "$(ui_paint title "$(core_clip '研讨间' "$((UI_COLS - 1))")")"
   if (( BOOKING_DEPTH == 0 )); then
-    _booking_render_categories
+    _booking_render_categories "${body}"
   elif (( BOOKING_DEPTH == 1 )); then
-    _booking_render_rooms
+    _booking_render_rooms "${body}"
   else
-    _booking_render_room
+    _booking_render_room "${body}"
   fi
 }
 
@@ -384,18 +412,24 @@ _booking_render_browse() {
 # 渲染：我的预约 / 待抢约
 # ---------------------------------------------------------------------------
 
+# 我的预约。body = 正文可用行数；本页固定 5 行（正文空行 + 切页条 + 标题 + 提示行 + 空行）。
 _booking_render_own() {
-  printf ' %s\n' "$(ui_paint title '我的预约')"
+  local body="${1:-}"
+  if [[ -z "${body}" ]]; then
+    body=$(( ${UI_ROWS:-24} - ${BANNER_CHROME_ROWS:-5} ))
+  fi
+  (( body < 0 )) && body=0
+  printf ' %s\n' "$(ui_paint title "$(core_clip '我的预约' "$((UI_COLS - 1))")")"
   if [[ -z "${BOOKING_OWN}" && -z "${TUI_FETCH_PID}" && "${BOOKING_OWN_LOADED}" != "1" ]]; then
     _booking_start_fetch own
   fi
   if [[ -z "${BOOKING_OWN}" ]]; then
     if [[ -n "${TUI_FETCH_PID}" && "${BOOKING_FETCH_KIND}" == "own" ]]; then
-      printf ' %s\n' "$(ui_paint muted '  正在加载我的预约…')"
+      printf ' %s\n' "$(ui_paint muted "$(core_clip '  正在加载我的预约…' "$((UI_COLS - 1))")")"
     elif [[ -n "${BUPTY_ERR}" ]]; then
-      printf ' %s\n' "$(ui_paint danger '  我的预约加载失败，请查看底部错误信息。')"
+      printf ' %s\n' "$(ui_paint danger "$(core_clip '  我的预约加载失败，请查看底部错误信息。' "$((UI_COLS - 1))")")"
     else
-      printf ' %s\n' "$(ui_paint muted '  暂无预约 · Enter 取消 · r 刷新')"
+      printf ' %s\n' "$(ui_paint muted "$(core_clip '  暂无预约 · Enter 取消 · r 刷新' "$((UI_COLS - 1))")")"
     fi
     return 0
   fi
@@ -405,8 +439,8 @@ _booking_render_own() {
   total="$(_booking_own_count)"
   (( BOOKING_OWN_SEL >= total )) && BOOKING_OWN_SEL=$(( total - 1 ))
   (( BOOKING_OWN_SEL < 0 )) && BOOKING_OWN_SEL=0
-  local visible=$(( UI_ROWS - 8 ))
-  if (( visible < 4 )); then visible=4; fi
+  local visible=$(( body - 5 ))
+  if (( visible < 1 )); then visible=1; fi
   local end=$total
   if (( end > visible )); then end=$visible; fi
   local offset=0
@@ -421,17 +455,23 @@ _booking_render_own() {
     label="$(printf '%s' "${row}" | jq -r '.status_label // ""' 2>/dev/null || true)"
     line="${devname} · ${begin} ~ ${end} · ${label}"
     if (( i == BOOKING_OWN_SEL )); then
-      _core_fit_compute "${line}" "$((UI_COLS - 4))"
+      _core_fit_compute "${line}" "$((UI_COLS - 3))"
       printf ' %s› %s%s\n' "${UI_HL_FG}" "${_CORE_FIT_OUT}" "${UI_RESET}"
     else
-      _core_fit_compute "${line}" "$((UI_COLS - 6))"
+      _core_fit_compute "${line}" "$((UI_COLS - 3))"
       printf '   %s\n' "${_CORE_FIT_OUT}"
     fi
   done
 }
 
+# 待抢约。body = 正文可用行数；本页固定 5 行（正文空行 + 切页条 + 标题 + 信息行 + 空行）。
 _booking_render_pending() {
-  printf ' %s\n' "$(ui_paint title '待抢约')"
+  local body="${1:-}"
+  if [[ -z "${body}" ]]; then
+    body=$(( ${UI_ROWS:-24} - ${BANNER_CHROME_ROWS:-5} ))
+  fi
+  (( body < 0 )) && body=0
+  printf ' %s\n' "$(ui_paint title "$(core_clip '待抢约' "$((UI_COLS - 1))")")"
   if [[ "${BOOKING_PENDING_LOADED}" != "1" ]]; then
     _booking_pending_load
   fi
@@ -442,15 +482,15 @@ _booking_render_pending() {
   local total
   total="$(_booking_pending_count)"
   if (( total == 0 )); then
-    printf ' %s\n' "$(ui_paint muted '  暂无待抢约。在房间详情选中时段后按 a 登记。')"
+    printf ' %s\n' "$(ui_paint muted "$(core_clip '  暂无待抢约。在房间详情选中时段后按 a 登记。' "$((UI_COLS - 1))")")"
     return 0
   fi
   (( BOOKING_PENDING_SEL >= total )) && BOOKING_PENDING_SEL=$(( total - 1 ))
   (( BOOKING_PENDING_SEL < 0 )) && BOOKING_PENDING_SEL=0
   local -a rows=()
   readarray -t rows <<< "${BOOKING_PENDING}"
-  local visible=$(( UI_ROWS - 8 ))
-  if (( visible < 4 )); then visible=4; fi
+  local visible=$(( body - 5 ))
+  if (( visible < 1 )); then visible=1; fi
   local end=$total
   if (( end > visible )); then end=$visible; fi
   local offset=0
@@ -464,10 +504,10 @@ _booking_render_pending() {
     dev="$(printf '%s' "${item}" | jq -r '.devName // .devId // ""' 2>/dev/null || true)"
     line="${begin} ~ ${end} · ${dev}"
     if (( i == BOOKING_PENDING_SEL )); then
-      _core_fit_compute "${line}" "$((UI_COLS - 4))"
+      _core_fit_compute "${line}" "$((UI_COLS - 3))"
       printf ' %s› %s%s\n' "${UI_HL_FG}" "${_CORE_FIT_OUT}" "${UI_RESET}"
     else
-      _core_fit_compute "${line}" "$((UI_COLS - 6))"
+      _core_fit_compute "${line}" "$((UI_COLS - 3))"
       printf '   %s\n' "${_CORE_FIT_OUT}"
     fi
   done
@@ -478,22 +518,55 @@ _booking_render_pending() {
 # ---------------------------------------------------------------------------
 
 # 子页切换条（浏览 / 我的预约 / 待抢约，←→ 切页）。
+# 宽度护栏：整行显示宽度必须 ≤ UI_COLS（docs/ARCHITECTURE.md 硬不变量）。
+#   行首固定 1 列空格；三个页签逐项按显示宽度拼接，放不下就停——窄终端下宁可
+#   少显示靠后的页签（同 _classrooms_render_building_bar 的取舍），也绝不横向
+#   顶破右边界。末尾提示「←→ 切子页」按剩余宽度 core_clip 截断（不劈宽字符），
+#   剩余不足 3 列（连「←→」都摆不下）时整段丢弃。宽度一律走 _core_width，
+#   绝不用 ${#s}——中文与 ←→ 都是宽/歧义字符，字节数不等于列数。
 _booking_render_tab_bar() {
-  local line="" i
+  local line="" plain="" i chip hint avail
   local -a names=("浏览" "我的预约" "待抢约")
+  local limit=$((UI_COLS - 1))          # 扣掉行首那 1 列空格，余下才是本行预算
+  (( limit < 0 )) && limit=0
   for i in 0 1 2; do
+    chip=" ${names[$i]} "
+    _core_width "${plain}${chip}"
+    (( _CORE_W > limit )) && break
+    plain+="${chip}"
     if (( i == BOOKING_TAB )); then
-      line+="$(ui_paint hl " ${names[$i]} ")"
+      line+="$(ui_paint hl "${chip}")"
     else
-      line+="$(ui_paint muted " ${names[$i]} ")"
+      line+="$(ui_paint muted "${chip}")"
     fi
   done
-  printf ' %s  %s\n' "${line}" "$(ui_paint muted '←→ 切子页')"
+  _core_width "${plain}"
+  avail=$(( limit - _CORE_W - 2 ))      # 提示前还有 2 列分隔，其余才是提示宽度
+  hint=""
+  if (( avail >= 3 )); then
+    hint="$(core_clip '←→ 切子页' "${avail}")"
+  fi
+  if [[ -n "${hint}" ]]; then
+    printf ' %s  %s\n' "${line}" "$(ui_paint muted "${hint}")"
+  else
+    printf ' %s\n' "${line}"
+  fi
 }
 
+# 进入视图渲染。body = 正文可用行数，由 tui_render 传入（不再自己减常量）。
 render_booking() {
+  local body="${1:-}"
+  if [[ -z "${body}" ]]; then
+    if declare -F banner_chrome_rows >/dev/null 2>&1; then
+      banner_chrome_rows booking
+      body=$(( UI_ROWS - BANNER_CHROME_ROWS ))
+    else
+      body=$(( ${UI_ROWS:-24} - 5 ))
+    fi
+  fi
+  (( body < 0 )) && body=0
   if ! creds_load; then
-    printf '\n %s\n' "$(ui_paint muted '  请先在设置中登录。')"
+    printf '\n %s\n' "$(ui_paint muted "$(core_clip '  请先在设置中登录。' "$((UI_COLS - 1))")")"
     return 0
   fi
   if _booking_stale; then
@@ -510,9 +583,9 @@ render_booking() {
   printf '\n'
   _booking_render_tab_bar
   case "${BOOKING_TAB}" in
-    1) _booking_render_own ;;
-    2) _booking_render_pending ;;
-    *) _booking_render_browse ;;
+    1) _booking_render_own "${body}" ;;
+    2) _booking_render_pending "${body}" ;;
+    *) _booking_render_browse "${body}" ;;
   esac
 }
 
@@ -526,13 +599,14 @@ _booking_form_intro() {
   room="$(_booking_selected_room)"
   devname="$(printf '%s' "${room}" | jq -r '.devName // .roomName // ""' 2>/dev/null || true)"
   ui_clear
-  tui_render_header
+  # 模态表单的抬头：只用状态行（同 assignments 的提交对话框）。
+  tui_render_statusline
   printf '\n'
-  printf ' %s\n' "$(ui_paint title '预约登记')"
+  printf ' %s\n' "$(ui_paint title "$(core_clip '预约登记' "$((UI_COLS - 1))")")"
   if [[ -n "${devname}" ]]; then
-    printf ' %s\n' "$(ui_paint muted "  房间：${devname}")"
+    printf ' %s\n' "$(ui_paint muted "$(core_clip "  房间：${devname}" "$((UI_COLS - 1))")")"
   fi
-  printf ' %s\n' "$(ui_paint muted '  Esc 任一步可取消')"
+  printf ' %s\n' "$(ui_paint muted "$(core_clip '  Esc 任一步可取消' "$((UI_COLS - 1))")")"
   printf '\n'
 }
 

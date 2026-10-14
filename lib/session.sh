@@ -16,7 +16,7 @@ BUPTY_UCLOUD_TOKEN=""
 BUPTY_UCLOUD_USER_ID=""
 BUPTY_UCLOUD_ACCOUNT=""
 
-# 图书馆研修间预约（order.bupt.edu.cn，仅内存 + 临时 cookie jar）。
+# 图书馆研讨间预约（order.bupt.edu.cn，仅内存 + 临时 cookie jar）。
 BUPTY_BOOKING_TOKEN=""
 BUPTY_BOOKING_ACC_NO=""
 BUPTY_BOOKING_ACCOUNT=""
@@ -65,7 +65,7 @@ ucloud_session_clear() {
   BUPTY_UCLOUD_ACCOUNT=""
 }
 
-# 图书馆研修间预约会话（token / accNo / 账号 / cookie jar 路径）。
+# 图书馆研讨间预约会话（token / accNo / 账号 / cookie jar 路径）。
 booking_session_get_token() {
   printf '%s' "${BUPTY_BOOKING_TOKEN}"
 }

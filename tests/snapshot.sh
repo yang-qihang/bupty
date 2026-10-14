@@ -37,8 +37,8 @@ render_classrooms_content() {
   ' 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g'
 }
 
-# 直接渲染研修间「内容函数」（加载 fixture 分类后调用 _booking_render_browse），
-# 用于断言内容标题「研修间」与分类名存在。
+# 直接渲染研讨间「内容函数」（加载 fixture 分类后调用 _booking_render_browse），
+# 用于断言内容标题「研讨间」与分类名存在。
 render_booking_content() {
   BUPTY_NO_COLOR=1 COLUMNS=80 LINES=24 BUPTY_HOME="${BUPTY_HOME}" bash -c '
     set -uo pipefail
@@ -88,9 +88,9 @@ assert_ok grep -q 'h 隐藏' <<< "${cr}"
 assert_ok grep -q 'H 显示隐藏' <<< "${cr}"
 assert_ok grep -q '空节次：08:00-08:45,09:50-10:35' <<< "${cr}"
 
-t_begin "研修间视图内容渲染（含标题与分类）"
+t_begin "研讨间视图内容渲染（含标题与分类）"
 bk="$(render_booking_content)"
-assert_ok grep -qE '^ 研修间$' <<< "${bk}"
+assert_ok grep -qE '^ 研讨间$' <<< "${bk}"
 assert_ok grep -q '沙河校区·一楼·朗读亭' <<< "${bk}"
 assert_ok grep -q '红色主题阅览室' <<< "${bk}"
 

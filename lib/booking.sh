@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# booking.sh —— 图书馆研修间预约（order.bupt.edu.cn/ic-web）。
+# booking.sh —— 图书馆研讨间预约（order.bupt.edu.cn/ic-web）。
 # 协议见 docs/order-booking.md：CAS 七步登录 + 分类/房间/空闲时段/主题/成员 + 预约/取消/我的预约/违约。
 # 会话状态存 lib/session.sh（token/accNo/账号/cookie jar 路径），凭据绝不打印、不进日志。
 

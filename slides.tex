@@ -39,7 +39,7 @@
         \item 查课表、空教室、成绩、考试 —— 移动教务
         \item 看作业与截止时间 —— 教学云
         \item 查班车、节假日、竞赛 —— 公共信息接口
-        \item 预约图书馆研修间 —— 另一个预约系统
+        \item 预约图书馆研讨间 —— 另一个预约系统
       \end{itemize}
     \item 每个系统都要单独打开、单独登录，来回切换很麻烦，还容易漏掉重要信息（比如作业截止、抢约时间）。
   \end{itemize}
@@ -74,7 +74,7 @@
     \begin{column}{0.5\textwidth}
       \begin{itemize}
         \item \textbf{公共查询}：班车时刻、法定节假日、竞赛活动 DDL。
-        \item \textbf{研修间预约}：浏览房间 / 空闲时段、预约、取消，以及「自动抢约」。
+        \item \textbf{研讨间预约}：浏览房间 / 空闲时段、预约、取消，以及「自动抢约」。
         \item \textbf{后台守护}：开机自启动 + 紧急 DDL 弹窗通知 + 抢约自动下单。
         \item \textbf{记住密码}：凭据本地安全保存，会话令牌仅存内存。
       \end{itemize}
@@ -135,7 +135,7 @@
         \setlength\itemsep{0.35em}
         \item \texttt{ucloud.sh}：教学云——统一认证、课程列表、作业。
         \item \texttt{public.sh}：公共接口——班车、节假日、竞赛活动。
-        \item \texttt{booking.sh}：研修间预约——登录、房间与空闲时段、预约、取消、抢约。
+        \item \texttt{booking.sh}：研讨间预约——登录、房间与空闲时段、预约、取消、抢约。
         \item \texttt{settings.sh}：读写设置文件（先写临时文件再覆盖，避免写坏）。
         \item \texttt{background.sh}：后台守护——紧急 DDL 弹窗 + 自动抢约。
         \item \texttt{submit.sh}：作业在线提交。
@@ -162,7 +162,7 @@
         \setlength\itemsep{0.5em}
         \item \texttt{exams.sh}：考试页面。
         \item \texttt{public.sh}：公共查询页面（班车 / 节假日 / 活动）。
-        \item \texttt{booking.sh}：研修间预约页面。
+        \item \texttt{booking.sh}：研讨间预约页面。
         \item \texttt{settings.sh}：设置页面。
       \end{itemize}
     \end{column}

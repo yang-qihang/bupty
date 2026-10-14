@@ -431,10 +431,10 @@ _classrooms_render_row() {
   fi
 
   if [[ "${i}" -eq "${CLASSROOMS_SEL}" ]]; then
-    _core_fit_compute "${line}" "$((UI_COLS - 4))"
+    _core_fit_compute "${line}" "$((UI_COLS - 3))"
     printf ' %s› %s%s\n' "${UI_HL_FG}" "${_CORE_FIT_OUT}" "${UI_RESET}"
   else
-    _core_fit_compute "${line}" "$((UI_COLS - 6))"
+    _core_fit_compute "${line}" "$((UI_COLS - 3))"
     printf '   %s\n' "${_CORE_FIT_OUT}"
   fi
 }
@@ -512,35 +512,64 @@ _classrooms_render_floor_bar() {
   local f
   while IFS= read -r f; do [[ -n "${f}" ]] && floors+=("${f}"); done < <(_classrooms_floors)
   local line=""
+  # 逐项拼接，超出宽度就停（保留「全部」）——与楼筛选条同一口径，否则楼层一多
+  # （实测 10 层楼 = 65 列）窄终端会横向换行，把帧顶穿。
+  local maxw=$((UI_COLS - 2))
+  local plain="全部" item
   if [[ -z "${CLASSROOMS_FLOOR}" ]]; then
     line+="$(ui_paint hl '全部')"
   else
     line+="$(ui_paint text '全部')"
   fi
   for f in "${floors[@]}"; do
+    item="  ${f} 楼"
+    _core_width "${plain}${item}"
+    if (( _CORE_W > maxw )); then
+      break
+    fi
+    plain+="${item}"
     if [[ "${f}" == "${CLASSROOMS_FLOOR}" ]]; then
-      line+="  $(ui_paint hl "${f} 楼")"
+      line+="$(ui_paint hl "${item}")"
     else
-      line+="  $(ui_paint muted "${f} 楼")"
+      line+="$(ui_paint muted "${item}")"
     fi
   done
   printf ' %s\n' "${line}"
 }
 
 # 房间列表主体（含信息行与滚动）。
+# body = 正文可用行数（tui_render 已按 chrome 唯一口径算好并传入，不再自己减常量）。
+# fixed = 本页在列表上方的实际固定行数（由 _classrooms_render_content 按 body 反推后传入，
+#         默认 12 = 5 行页首 + 三条筛选条 2/3/2，单独调用时按满配算）。
 _classrooms_render_list() {
+  local body="${1:-}"
+  local fixed="${2:-12}"
+  if [[ -z "${body}" ]]; then
+    if declare -F banner_chrome_rows >/dev/null 2>&1; then
+      banner_chrome_rows classrooms
+      body=$(( UI_ROWS - BANNER_CHROME_ROWS ))
+    else
+      body=$(( ${UI_ROWS:-24} - 5 ))
+    fi
+  fi
+  (( body < 0 )) && body=0
   # 在当前 shell 直接过滤（不能用 $(...) 包一层，否则会丢 _CLASSROOMS_ROWS）。
   _classrooms_filtered
   local total="${_CLASSROOMS_COUNT}"
 
   if (( total == 0 )); then
-    printf '\n %s\n' "$(ui_paint muted '  当前筛选下暂无空教室。')"
+    # 空结果 2 行（空行 + 提示）。只留得下 1 行时省掉那个空行——否则极矮窗下
+    # 这一帧会多出 1 行把终端顶穿（body 只够 1 行列表时正是如此）。
+    if (( body - fixed >= 2 )); then printf '\n'; fi
+    printf ' %s\n' "$(ui_paint muted '  当前筛选下暂无空教室。')"
     return 0
   fi
 
-  # 顶部固定行：页眉+分隔(2) + 空行+标题+信息行+键位行+空行(5) + 楼筛选(2) + 时段筛选(3，分两行) + 楼层筛选(2) + 底部三行(3) = 17。
-  local visible=$((UI_ROWS - 17))
-  if (( visible < 4 )); then visible=4; fi
+  # 本页上方固定行：空行+标题+信息行+键位行+空行(5) + 楼筛选(2) + 时段筛选(3，分两行)
+  # + 楼层筛选(2)。可见行数 = body - fixed。F=12 是实测值：列表只放 1 条、UI_ROWS=1000 时
+  # 正文总行数 13，减 1 条列表行即得。
+  local visible=$(( body - fixed ))
+  if (( visible < 1 )); then visible=1; fi
   if (( CLASSROOMS_SEL >= total )); then CLASSROOMS_SEL=$((total - 1)); fi
   if (( CLASSROOMS_SEL < 0 )); then CLASSROOMS_SEL=0; fi
   local offset="${CLASSROOMS_OFFSET:-0}"
@@ -556,7 +585,18 @@ _classrooms_render_list() {
 }
 
 # 内容渲染：信息行 + 楼筛选 + 房间列表。
+# body = 正文可用行数，由 tui_render 传入；直接调用（tests/snapshot.sh）时自行推导。
 _classrooms_render_content() {
+  local body="${1:-}"
+  if [[ -z "${body}" ]]; then
+    if declare -F banner_chrome_rows >/dev/null 2>&1; then
+      banner_chrome_rows classrooms
+      body=$(( UI_ROWS - BANNER_CHROME_ROWS ))
+    else
+      body=$(( ${UI_ROWS:-24} - 5 ))
+    fi
+  fi
+  (( body < 0 )) && body=0
   printf '\n'
   printf ' %s\n' "$(ui_paint title '空教室')"
   if [[ -z "${CLASSROOMS_DATA}" ]]; then
@@ -593,16 +633,40 @@ _classrooms_render_content() {
   printf ' %s\n' "$(ui_paint muted "$(core_fit "空教室 · ${target_date} · 校区 ${campus_name} · 楼 ${building_disp} · 时段 ${slot_disp} · 楼层 ${floor_disp} · 共 ${total} 间 · 隐藏 ${hidden_count} 间" "$((UI_COLS - 2))")")"
   printf ' %s\n' "$(ui_paint muted "$(core_fit "${hint}" "$((UI_COLS - 2))")")"
   printf '\n'
-  _classrooms_render_building_bar
-  _classrooms_render_slot_bar
-  _classrooms_render_floor_bar
-  _classrooms_render_list
+
+  # 三条筛选条（2/3/2 行）也必须随 body 收缩：页首固定 5 行 + 至少 1 行列表，
+  # 故筛选条预算 = body - 6，按 楼(2) → 时段(3) → 楼层(2) 逐级让位（保留前缀，
+  # 免得出现的条目次序在矮窗下被打乱）。放不下任何一条时三条全隐，列表独占正文。
+  local class_fixed=5
+  local class_bars_budget=$(( body - 6 ))
+  if (( class_bars_budget >= 7 )); then
+    class_fixed=12
+  elif (( class_bars_budget >= 5 )); then
+    class_fixed=10
+  elif (( class_bars_budget >= 2 )); then
+    class_fixed=7
+  fi
+  local class_bars=$(( class_fixed - 5 ))
+  if (( class_bars >= 2 )); then _classrooms_render_building_bar; fi
+  if (( class_bars >= 5 )); then _classrooms_render_slot_bar; fi
+  if (( class_bars >= 7 )); then _classrooms_render_floor_bar; fi
+  _classrooms_render_list "${body}" "${class_fixed}"
 }
 
 # 进入视图渲染。首次进入同步拉取（短暂阻塞），随后渲染列表或错误。
 render_classrooms() {
+  local body="${1:-}"
+  if [[ -z "${body}" ]]; then
+    if declare -F banner_chrome_rows >/dev/null 2>&1; then
+      banner_chrome_rows classrooms
+      body=$(( UI_ROWS - BANNER_CHROME_ROWS ))
+    else
+      body=$(( ${UI_ROWS:-24} - 5 ))
+    fi
+  fi
+  (( body < 0 )) && body=0
   if ! creds_load; then
-    printf '\n %s\n' "$(ui_paint muted '  请先在设置中登录。')"
+    printf '\n %s\n' "$(ui_paint muted "$(core_clip '  请先在设置中登录。' "$((UI_COLS - 1))")")"
     return 0
   fi
   _classrooms_hidden_load
@@ -620,7 +684,7 @@ render_classrooms() {
   if [[ -z "${CLASSROOMS_DATA}" ]]; then
     printf '\n %s\n' "$(ui_paint muted '  正在加载空教室…')"
   else
-    _classrooms_render_content
+    _classrooms_render_content "${body}"
   fi
 }
 

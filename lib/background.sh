@@ -221,7 +221,7 @@ autobook_run_once() {
     # 空闲则下单。
     if booking_submit "${dev_id}" "${begin}" "${end}" "${test_name}" "${members}" "${kind}" >/dev/null; then
       _bg_log "抢约成功：${begin} ${end}"
-      notify_send "研修间抢约成功" "${begin} ${end} · ${test_name}"
+      notify_send "研讨间抢约成功" "${begin} ${end} · ${test_name}"
       removed=1
       continue
     fi
@@ -229,7 +229,7 @@ autobook_run_once() {
     # 下单失败：永久性错误（连续预约/禁用/违约）直接丢弃并通知；临时错误有限重试（最多 3 次）。
     if [[ "${BUPTY_ERR:-}" == *"不能连续预约"* || "${BUPTY_ERR:-}" == *"禁用"* || "${BUPTY_ERR:-}" == *"违约"* ]]; then
       _bg_log "放弃抢约（${begin}）：${BUPTY_ERR:-未知错误}"
-      notify_send "研修间抢约失败" "${begin} ${end} · ${BUPTY_ERR:-未知错误}"
+      notify_send "研讨间抢约失败" "${begin} ${end} · ${BUPTY_ERR:-未知错误}"
       removed=1
       continue
     fi

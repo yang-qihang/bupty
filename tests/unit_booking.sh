@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/unit_booking.sh —— 图书馆研修间预约（booking.sh）纯函数单元测试（全离线 fixture）。
+# tests/unit_booking.sh —— 图书馆研讨间预约（booking.sh）纯函数单元测试（全离线 fixture）。
 # 只测可离线、无网络副作用的解析 / 组装 / 持久化函数，不调用 booking_login 等网络函数。
 set -uo pipefail
 
