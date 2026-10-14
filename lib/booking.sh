@@ -412,7 +412,7 @@ _booking_compute_free_slots() {
 # reserve 响应 -> 房间 JSON 数组（含计算好的 free 空闲时段）。
 _booking_parse_rooms() {
   local body="$1" date="$2"
-  local out="" line devid devname roomname minu maxu interval minr maxr open resv free roomjson
+  local out="" line devid devname roomname minu maxu interval minr maxr open resv free open_start open_end roomjson
   while IFS= read -r line; do
     [[ -z "${line}" ]] && continue
     devid="$(printf '%s' "${line}" | jq -r '.devId // empty' 2>/dev/null || true)"
@@ -432,13 +432,17 @@ _booking_parse_rooms() {
     open="$(printf '%s' "${line}" | jq -c '.openTimes // []' 2>/dev/null || true)"
     resv="$(printf '%s' "${line}" | jq -c '[.resvInfo[]? | select(.startTime != null and .endTime != null)]' 2>/dev/null || true)"
     free="$(_booking_compute_free_slots "${open}" "${resv}" "${interval}" "${minr}" "${date}")"
+    open_start="$(printf '%s' "${line}" | jq -r '.openStart // "08:00"' 2>/dev/null || true)"
+    open_end="$(printf '%s' "${line}" | jq -r '.openEnd // "22:00"' 2>/dev/null || true)"
     roomjson="$(jq -n \
       --arg id "${devid}" --arg dn "${devname}" --arg rn "${roomname}" \
+      --arg os "${open_start}" --arg oe "${open_end}" \
       --argjson minu "${minu}" --argjson maxu "${maxu}" \
       --argjson interval "${interval}" --argjson minr "${minr}" --argjson maxr "${maxr}" \
       --argjson free "${free}" \
       '{devId:$id, devName:$dn, roomName:$rn, minUser:$minu, maxUser:$maxu,
-        timeInterval:$interval, minResvTime:$minr, maxResvTime:$maxr, free:$free}')"
+        timeInterval:$interval, minResvTime:$minr, maxResvTime:$maxr,
+        open_start:$os, open_end:$oe, free:$free}')"
     out+="${roomjson}"$'\n'
   done < <(printf '%s' "${body}" | jq -c '.data[]? // empty' 2>/dev/null)
   printf '%s' "${out}" | jq -s -c '.' 2>/dev/null || printf '[]'

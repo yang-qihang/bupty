@@ -370,7 +370,6 @@ _booking_render_room() {
 }
 
 _booking_render_browse() {
-  printf '\n'
   printf ' %s\n' "$(ui_paint title '研修间')"
   if (( BOOKING_DEPTH == 0 )); then
     _booking_render_categories
@@ -386,7 +385,6 @@ _booking_render_browse() {
 # ---------------------------------------------------------------------------
 
 _booking_render_own() {
-  printf '\n'
   printf ' %s\n' "$(ui_paint title '我的预约')"
   if [[ -z "${BOOKING_OWN}" && -z "${TUI_FETCH_PID}" && "${BOOKING_OWN_LOADED}" != "1" ]]; then
     _booking_start_fetch own
@@ -433,7 +431,6 @@ _booking_render_own() {
 }
 
 _booking_render_pending() {
-  printf '\n'
   printf ' %s\n' "$(ui_paint title '待抢约')"
   if [[ "${BOOKING_PENDING_LOADED}" != "1" ]]; then
     _booking_pending_load
@@ -480,6 +477,20 @@ _booking_render_pending() {
 # 视图入口
 # ---------------------------------------------------------------------------
 
+# 子页切换条（浏览 / 我的预约 / 待抢约，←→ 切页）。
+_booking_render_tab_bar() {
+  local line="" i
+  local -a names=("浏览" "我的预约" "待抢约")
+  for i in 0 1 2; do
+    if (( i == BOOKING_TAB )); then
+      line+="$(ui_paint hl " ${names[$i]} ")"
+    else
+      line+="$(ui_paint muted " ${names[$i]} ")"
+    fi
+  done
+  printf ' %s  %s\n' "${line}" "$(ui_paint muted '←→ 切子页')"
+}
+
 render_booking() {
   if ! creds_load; then
     printf '\n %s\n' "$(ui_paint muted '  请先在设置中登录。')"
@@ -496,6 +507,8 @@ render_booking() {
       _booking_start_fetch categories
     fi
   fi
+  printf '\n'
+  _booking_render_tab_bar
   case "${BOOKING_TAB}" in
     1) _booking_render_own ;;
     2) _booking_render_pending ;;
@@ -643,30 +656,37 @@ _booking_do_book() {
 }
 
 _booking_do_autobook() {
-  if (( BOOKING_DATE_OFF == 0 )); then
-    core_err "自动抢约仅支持明天及以后的时段。"
-    return 1
-  fi
   local room
   room="$(_booking_selected_room)"
   [[ -z "${room}" || "${room}" == "null" ]] && { core_err "请先选择房间。"; return 1; }
-  local dev_id minu maxu interval minr maxr date lab_ids
+  local dev_id minu maxu interval minr maxr lab_ids
   dev_id="$(printf '%s' "${room}" | jq -r '.devId // empty' 2>/dev/null || true)"
   minu="$(printf '%s' "${room}" | jq -r '.minUser // 1' 2>/dev/null || true)"
   maxu="$(printf '%s' "${room}" | jq -r '.maxUser // 1' 2>/dev/null || true)"
   interval="$(printf '%s' "${room}" | jq -r '.timeInterval // 30' 2>/dev/null || true)"
   minr="$(printf '%s' "${room}" | jq -r '.minResvTime // 10' 2>/dev/null || true)"
   maxr="$(printf '%s' "${room}" | jq -r '.maxResvTime // 120' 2>/dev/null || true)"
-  date="$(_booking_selected_date)"
   lab_ids="$(printf '%s' "${BOOKING_ROOMS_DATA}" | jq -r '.labId // empty' 2>/dev/null || true)"
-  local slot slot_start slot_end
-  slot="$(printf '%s' "${BOOKING_SLOTS}" | jq -c '.['"${BOOKING_SEL_SLOT}"'] // null' 2>/dev/null || true)"
-  [[ -z "${slot}" || "${slot}" == "null" ]] && { core_err "请先选择空闲时段。"; return 1; }
-  slot_start="$(printf '%s' "${slot}" | jq -r '.start // ""' 2>/dev/null || true)"
-  slot_end="$(printf '%s' "${slot}" | jq -r '.end // ""' 2>/dev/null || true)"
-  if ! _booking_collect_request "${dev_id}" "${minu}" "${maxu}" "${interval}" "${minr}" "${maxr}" "${date}" "${slot_start}" "${slot_end}"; then
+
+  # 1. 目标日期（默认明天，可输入更晚的日期）。
+  local today tomorrow target_date days
+  today="$(core_today)"
+  tomorrow="$(TZ=Asia/Shanghai date -d "${today} +1 day" +%Y-%m-%d 2>/dev/null || date -d "${today} +1 day" +%Y-%m-%d)"
+  if ! ui_input "目标日期 YYYY-MM-DD（默认明天 ${tomorrow}，可更晚）： " "${tomorrow}" 0 10; then core_err "已取消。"; return 1; fi
+  target_date="$(core_trim "${UI_INPUT_RESULT}")"
+  if [[ ! "${target_date}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then core_err "日期格式应为 YYYY-MM-DD。"; return 1; fi
+  if [[ "$(TZ=Asia/Shanghai date -d "${target_date}" +%Y-%m-%d 2>/dev/null)" != "${target_date}" ]]; then core_err "日期无效。"; return 1; fi
+  days="$(core_days_between "${target_date}" "${today}")"
+  if [[ ! "${days}" =~ ^[0-9]+$ ]] || (( days <= 0 )); then core_err "目标日期需为明天及以后。"; return 1; fi
+
+  # 2. 开始时间 + 时长：以房间开放时间为范围（未来日期尚未放出空闲时段）。
+  local open_start open_end
+  open_start="$(printf '%s' "${room}" | jq -r '.open_start // "08:00"' 2>/dev/null || true)"
+  open_end="$(printf '%s' "${room}" | jq -r '.open_end // "22:00"' 2>/dev/null || true)"
+  if ! _booking_collect_request "${dev_id}" "${minu}" "${maxu}" "${interval}" "${minr}" "${maxr}" "${target_date}" "${open_start}" "${open_end}"; then
     return 1
   fi
+
   local pending_item
   pending_item="$(jq -n --arg dev "${dev_id}" --arg lab "${lab_ids}" \
     --arg b "${BOOKING_FORM_BEGIN}" --arg e "${BOOKING_FORM_END}" \
@@ -675,7 +695,7 @@ _booking_do_autobook() {
     '{devId:$dev, labIds:$lab, begin:$b, end:$e, testName:$tn, member_accnos_csv:$mem, member_kind:$kind, created_at:$now}')"
   booking_pending_add "${pending_item}"
   BOOKING_PENDING_LOADED=0
-  tui_set_status "已登记自动抢约，后台将在时段放出时自动下单。"
+  tui_set_status "已登记自动抢约（${target_date}），后台将在时段放出时自动下单。"
   return 0
 }
 

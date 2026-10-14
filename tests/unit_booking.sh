@@ -77,6 +77,8 @@ assert_eq "$(printf '%s' "${ROOMS}" | jq -r '[.[] | select(.devId == "100888915"
 free_b="$(printf '%s' "${ROOMS}" | jq -cS '[.[] | select(.devId == "100651195") | .free[]]')"
 assert_eq "${free_b}" '[{"end":"22:00","start":"08:00"}]' "研讨间 314 全天空闲"
 assert_eq "$(printf '%s' "${ROOMS}" | jq -r '[.[] | select(.devId == "100651195") | .minUser] | .[0]')" "2" "研讨间 minUser=2"
+assert_eq "$(printf '%s' "${ROOMS}" | jq -r '[.[] | select(.devId == "100888915") | .open_start] | .[0]')" "08:00" "房间 open_start 透传"
+assert_eq "$(printf '%s' "${ROOMS}" | jq -r '[.[] | select(.devId == "100888915") | .open_end] | .[0]')" "22:00" "房间 open_end 透传"
 
 # ---------------------------------------------------------------------------
 # 3. 空闲时段计算：步进 / 最短时长过滤 / 时间转 HH:MM
