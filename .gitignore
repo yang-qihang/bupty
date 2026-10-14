@@ -27,3 +27,6 @@ cache/
 *.out
 *.snm
 *.toc
+
+# beamer [fragile] 帧产生的 verbatim 辅助文件
+*.vrb
