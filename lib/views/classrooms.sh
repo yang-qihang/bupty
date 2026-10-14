@@ -624,8 +624,14 @@ _classrooms_render_content() {
   _classrooms_filtered
   total="${_CLASSROOMS_COUNT}"
 
+  local hint
+  if [[ "${CLASSROOMS_SHOW_HIDDEN}" == "1" ]]; then
+    hint="t 时段 · F 楼层 · h 取消隐藏 · H 退出显示 · x 全部取消 · ←→ 校区 · f 楼 · ↑↓ 选择 · r 刷新"
+  else
+    hint="t 时段 · F 楼层 · h 隐藏 · H 显示隐藏 · x 全部取消 · ←→ 校区 · f 楼 · ↑↓ 选择 · r 刷新"
+  fi
   printf ' %s\n' "$(ui_paint muted "$(core_fit "空教室 · ${target_date} · 校区 ${campus_name} · 楼 ${building_disp} · 时段 ${slot_disp} · 楼层 ${floor_disp} · 共 ${total} 间 · 隐藏 ${hidden_count} 间" "$((UI_COLS - 2))")")"
-  printf ' %s\n' "$(ui_paint muted "$(core_fit "t 时段 · F 楼层 · h 隐藏 · H 显示隐藏 · ←→ 校区 · f 楼 · ↑↓ 选择 · r 刷新" "$((UI_COLS - 2))")")"
+  printf ' %s\n' "$(ui_paint muted "$(core_fit "${hint}" "$((UI_COLS - 2))")")"
   printf '\n'
 
   # 三条筛选条（2/3/2 行）也必须随 body 收缩：页首固定 5 行 + 至少 1 行列表，
@@ -802,6 +808,21 @@ handle_classrooms_key() {
       CLASSROOMS_SHOW_HIDDEN=$(( 1 - CLASSROOMS_SHOW_HIDDEN ))
       CLASSROOMS_SEL=0
       CLASSROOMS_OFFSET=0
+      ;;
+    x)
+      # 取消全部隐藏（清空隐藏列表）。
+      local hc
+      hc="$(_classrooms_hidden_count)"
+      if (( hc == 0 )); then core_err "当前没有隐藏的教室。"; return 0; fi
+      if ! ui_input "取消全部隐藏（共 ${hc} 间）？(y/回车=确认)" "" 0 1; then core_err "已取消。"; return 1; fi
+      local ans="${UI_INPUT_RESULT}"
+      if [[ -n "${ans}" && "${ans}" != "y" && "${ans}" != "Y" ]]; then core_err "已取消。"; return 1; fi
+      CLASSROOMS_HIDDEN=""
+      _classrooms_hidden_save
+      CLASSROOMS_SHOW_HIDDEN=0
+      CLASSROOMS_SEL=0
+      CLASSROOMS_OFFSET=0
+      tui_set_status "已取消全部隐藏。"
       ;;
     UP)
       if (( CLASSROOMS_SEL > 0 )); then CLASSROOMS_SEL=$((CLASSROOMS_SEL - 1)); fi
