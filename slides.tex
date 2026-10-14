@@ -1,0 +1,227 @@
+% !TEX program = xelatex
+% bupty 项目架构汇报 —— Linux 课程作业
+% 编译方式：xelatex slides.tex（需安装 ctex / beamer / tikz 宏包）
+\documentclass[aspectratio=169]{beamer}
+
+\usepackage[UTF8, scheme=plain]{ctex}
+\usepackage{tikz}
+\usetikzlibrary{positioning, arrows.meta, calc}
+
+\usetheme{Madrid}
+\usecolortheme{seahorse}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{footline}{\hfill\insertframenumber/\inserttotalframenumber\kern1em\vskip0.5em}
+
+\title{bupty：纯 Bash 的北邮一站式信息查询终端}
+\subtitle{Linux 课程作业 —— 架构设计、实现与测试}
+\author{2025211681}
+\date{2026 年 10 月}
+
+\begin{document}
+
+\begin{frame}
+  \titlepage
+\end{frame}
+
+\begin{frame}{目录}
+  \tableofcontents
+\end{frame}
+
+% ============================================================================
+\section{动机}
+
+\begin{frame}{动机：多平台割裂的日常痛点}
+  \begin{itemize}
+    \setlength\itemsep{0.8em}
+    \item 北邮学生日常要登录多个相互独立的信息系统：
+      \begin{itemize}
+        \item 移动教务（课表、空教室、成绩、考试）
+        \item 教学云 UCloud（课程作业与 DDL）
+        \item 信息门户 / 公共接口（班车、节假日、竞赛 DDL）
+        \item 图书馆研修间预约系统
+      \end{itemize}
+    \item 频繁在各平台之间切换、重复登录，信息分散、易遗漏（尤其作业 DDL 与抢约）。
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{动机：为什么重写、为什么用 Bash}
+  \begin{itemize}
+    \setlength\itemsep{0.8em}
+    \item 参考项目 \texttt{where\_to\_study} 功能完整，但 CLI 需要传大量参数，操作不直观。
+    \item 我们希望提供一个 \textbf{TUI（终端图形界面）}：方向键选择、Enter 进入、Esc 返回，
+      交互符合直觉。
+    \item 课程要求用 \textbf{Bash} 实现：本项目全部由 Bash + 少量系统工具（\texttt{curl}、\texttt{jq}）构成，
+      无额外运行时依赖。
+  \end{itemize}
+\end{frame}
+
+% ============================================================================
+\section{功能}
+
+\begin{frame}{功能总览}
+  \begin{columns}[T]
+    \begin{column}{0.5\textwidth}
+      \begin{itemize}
+        \item \textbf{作业 DDL}：教学云作业聚合、截止时间排序、紧急程度标注、在线提交。
+        \item \textbf{课表}：周节次网格，可切周 / 切星期。
+        \item \textbf{空教室}：双校区，按楼 / 楼层 / 时段筛选，可隐藏教室。
+        \item \textbf{成绩 / 考试}：学期成绩、平均绩点、考试安排。
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.5\textwidth}
+      \begin{itemize}
+        \item \textbf{公共查询}：班车时刻、法定节假日、竞赛活动 DDL。
+        \item \textbf{研修间预约}：浏览房间 / 空闲时段、预约、取消，以及「自动抢约」。
+        \item \textbf{后台守护}：开机自启动 + 紧急 DDL 弹窗通知 + 抢约自动下单。
+        \item \textbf{记住密码}：凭据本地安全保存，会话令牌仅存内存。
+      \end{itemize}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ============================================================================
+\section{架构}
+
+\begin{frame}{整体架构：分层与模块}
+  \begin{center}
+    \begin{tikzpicture}[
+        font=\small,
+        node distance=0.7cm and 0.5cm,
+        box/.style={draw, rounded corners=2pt, align=center, fill=blue!6, minimum height=0.9cm},
+        arr/.style={-{Stealth}, thick, gray}]
+      \node[box, fill=orange!12] (bin) {bin/bupty（入口 + 后台模式）};
+      \node[box, below=of bin, fill=green!8] (tui) {tui.sh（主事件循环 · 导航栈 · 异步拉取）};
+      \node[box, below=of tui, fill=blue!8] (views) {lib/views/*.sh（各页面视图）};
+      \node[box, below=of views, fill=purple!8, text width=10cm] (lib) {lib/*.sh（核心库）\\ core · http · session · creds · parse · sjd \\ ucloud · public · booking · settings · background · submit · ui};
+      \node[box, below=of lib, fill=red!8] (net) {学校各平台 HTTPS 接口（教务 / 教学云 / 公共 / 预约）};
+
+      \draw[arr] (bin) -- (tui);
+      \draw[arr] (tui) -- (views);
+      \draw[arr] (views) -- (lib);
+      \draw[arr] (lib) -- (net);
+    \end{tikzpicture}
+  \end{center}
+\end{frame}
+
+\begin{frame}{数据流：JSON 贯穿始终}
+  \begin{itemize}
+    \setlength\itemsep{0.6em}
+    \item 各网络模块统一输出 \textbf{JSON 字符串}（用 \texttt{jq} 生成 / 消费），模块间不拼接脆弱的分隔符。
+    \item 视图层先做一次 \texttt{jq} \textbf{预计算}（TSV 行缓存），渲染循环内用纯 Bash 读取，不再反复调用 \texttt{jq}。
+    \item 典型链路：
+      \[
+      \text{网络模块} \xrightarrow{\ \texttt{JSON}\ } \text{视图预计算} \xrightarrow{\ \texttt{TSV}\ } \text{逐行渲染}
+      \]
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{异步加载：进入页面即时显示、后台拉取}
+  \begin{itemize}
+    \setlength\itemsep{0.6em}
+    \item 首次进入某页面时，后台子进程拉取数据（\texttt{\_async\_start}），页面先显示「正在加载…」。
+    \item 主循环在每个超时点轮询（\texttt{\_async\_poll}），完成后回调 \texttt{apply\_<view>} 并重绘。
+    \item 渲染用「帧缓冲」：整帧先写入临时文件再一次性输出，避免逐行重绘闪烁；满屏时页脚末行不带换行，避免顶出页眉。
+  \end{itemize}
+\end{frame}
+
+% ============================================================================
+\section{设计选择}
+
+\begin{frame}{设计选择（一）：Bash 的模块化}
+  \begin{itemize}
+    \setlength\itemsep{0.6em}
+    \item 不写「巨型 shell」，而是按职责拆分为多个 \texttt{source} 加载的模块文件。
+    \item 命名约定：纯解析函数（\texttt{lib/parse.sh}）\textbf{不做网络}，便于离线单测；
+      网络函数返回 \texttt{0/1} 并把结果写 stdout、错误写全局 \texttt{BUPTY\_ERR}。
+    \item 视图 = \texttt{render\_<name>()} + \texttt{handle\_<name>\_key()}，与主循环解耦。
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{设计选择（二）：渲染性能}
+  \begin{itemize}
+    \setlength\itemsep{0.6em}
+    \item \textbf{消除子进程 fork}：渲染热循环里用无 fork 的 \texttt{\_core\_fit\_compute} 计算显示宽度，
+      用参数展开切分 TSV，避免 \texttt{\$(...)} 与 herestring。
+    \item \textbf{单趟 O($n$) 截断}：中文按 2 列宽截断文本，避免逐字符回退造成的 O($n^2$) 卡顿。
+    \item \textbf{结果缓存}：凭据 / 活动过滤 / 班车显示行只算一次；课表、班车等页从约 200ms 降到约 10--30ms/键。
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{设计选择（三）：安全}
+  \begin{itemize}
+    \setlength\itemsep{0.6em}
+    \item 凭据目录 \texttt{0700}、文件 \texttt{0600}，写入时拒绝符号链接；密码永不打印、不进日志。
+    \item 教务 / 教学云 / 预约的令牌仅存内存，过期自动重登一次；预约使用 CAS 七步认证，
+      全程同一 cookie jar、一次性 execution 用后即弃。
+    \item 会话退出时清理 cookie jar。
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{设计选择（四）：可配置与后台}
+  \begin{itemize}
+    \setlength\itemsep{0.6em}
+    \item 设置持久化到 \texttt{settings.json}（临时文件 + \texttt{mv} 原子写）。
+    \item \texttt{-{}-background} 后台模式：单实例锁，循环拉作业并对「紧急 DDL」弹窗；
+      自动抢约只抢「明天及以后」，永久性错误丢弃、临时错误限次重试。
+  \end{itemize}
+\end{frame}
+
+% ============================================================================
+\section{测试}
+
+\begin{frame}{测试方法}
+  \begin{columns}[T]
+    \begin{column}{0.55\textwidth}
+      \begin{itemize}
+        \item \textbf{单元测试}（\texttt{tests/unit\_*.sh}）：离线、基于 fixture JSON，
+          断言解析 / 组装 / 过滤等纯函数。
+        \item \textbf{渲染快照}：渲染各视图并断言关键文本（去 ANSI），验证界面文案。
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.45\textwidth}
+      \begin{itemize}
+        \item \textbf{多窗口尺寸自检}：在 80/100/120/60/140 列下断言不溢出、页眉在、无横向换行。
+        \item \textbf{真实网络集成测试}（只读 + 授权）：登录、拉取、预约 $\to$ 取消，验证协议与实现一致。
+        \item \textbf{对抗式评审}：实现 / 测试 / 评审由不同 agent 分别完成，不共享上下文。
+      \end{itemize}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{多代理开发流程}
+  \begin{center}
+    \begin{tikzpicture}[
+        font=\small,
+        node distance=0.9cm and 0.6cm,
+        box/.style={draw, rounded corners=2pt, align=center, fill=blue!6, minimum width=2.4cm, minimum height=0.8cm},
+        arr/.style={-{Stealth}, thick, gray}]
+      \node[box, fill=green!10] (rev) {逆向工程\\（理解 API 协议）};
+      \node[box, right=of rev, fill=orange!10] (impl) {实现 agent\\（写代码）};
+      \node[box, right=of impl, fill=blue!10] (test) {测试 agent\\（写并跑测试）};
+      \node[box, right=of test, fill=red!10] (review) {评审 agent\\（对抗式找缺陷）};
+      \draw[arr] (rev) -- (impl);
+      \draw[arr] (impl) -- (test);
+      \draw[arr] (test) -- (review);
+      \draw[arr, bend left=25] (review) to node[above, font=\tiny] {反馈修复} (impl);
+    \end{tikzpicture}
+  \end{center}
+  \vspace{0.5em}
+  每一轮：一个 agent 实现、一个写测试、一个对抗式评审，彼此不共用上下文，避免「自我蒙混」。
+\end{frame}
+
+% ============================================================================
+\section{总结}
+
+\begin{frame}{总结}
+  \begin{itemize}
+    \setlength\itemsep{0.8em}
+    \item 用纯 Bash 实现了一个功能完整、交互友好的北邮信息查询 \textbf{TUI}。
+    \item 核心经验：模块化拆分、JSON 作为数据契约、异步加载 + 帧缓冲、渲染热循环去 fork、O(n) 宽度计算。
+    \item 通过「单元测试 + 渲染快照 + 多尺寸自检 + 真实网络集成 + 对抗式评审」保证了正确性与界面质量。
+    \item 网络协议（教务 / 教学云 / 公共 / 预约）均经真实请求逐条逆向核对并文档化。
+  \end{itemize}
+  \vspace{1em}
+  \centering 谢谢！
+\end{frame}
+
+\end{document}
