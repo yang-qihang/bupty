@@ -23,11 +23,9 @@ render_home() {
     IFS='|' read -r key label desc <<< "${items[$i]}"
     local idx=$((i + 1))
     local text="  ${idx}. ${label}"
-    local pad
-    pad="$((UI_COLS - 4 - $(core_fit_width "${text}") ))"
-    (( pad < 0 )) && pad=0
     if [[ "${i}" -eq "${HOME_SEL}" ]]; then
-      printf ' %s%s%s\n' "${UI_HL}" "$(core_fit "${text}    ${desc}" "$((UI_COLS - 4))")" "${UI_RESET}"
+      # 高亮条铺满整行（前导 1 空格 + UI_COLS-1 列），避免右侧留白。
+      printf ' %s%s%s\n' "${UI_HL}" "$(core_fit "${text}    ${desc}" "$((UI_COLS - 1))")" "${UI_RESET}"
     else
       printf ' %s  %s\n' "$(ui_paint accent "${text}")" "$(ui_paint muted "${desc}")"
     fi
