@@ -1,0 +1,16 @@
+{
+  "code": 0,
+  "message": "成功",
+  "data": [
+    {
+      "uuid": "2ea545a5bdc840218f472b34def1b8c6",
+      "resvId": 107677268,
+      "resvStatus": 1027,
+      "resvBeginTime": 1791957600000,
+      "resvEndTime": 1791959400000,
+      "resvDevInfoList": [{"devId": 100888915, "devName": "朗读亭（沙河东侧）"}],
+      "resvMemberInfoList": null,
+      "memberKind": 1
+    }
+  ]
+}

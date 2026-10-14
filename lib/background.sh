@@ -149,6 +149,107 @@ background_check_once() {
   return 0
 }
 
+# ---------------------------------------------------------------------------
+# 自动抢约：轮询 pending_bookings，目标时段空闲则下单（仅明天及以后）。
+# ---------------------------------------------------------------------------
+
+# 单轮抢约检查。失败不致命，只记录并保留 pending，等待下一轮或人工处理。
+autobook_run_once() {
+  local pending
+  pending="$(booking_pending_list 2>/dev/null || true)"
+  if [[ -z "${pending}" ]]; then
+    return 0
+  fi
+  if ! creds_load; then
+    _bg_log "抢约失败：未找到凭据。"
+    return 1
+  fi
+
+  local today
+  today="$(core_today)"
+  local -a items=()
+  local line
+  while IFS= read -r line; do
+    [[ -n "${line}" ]] && items+=("${line}")
+  done <<< "${pending}"
+
+  local item dev_id lab_ids begin end test_name members kind target_date days tries
+  local new_pending="" removed=0
+  for item in "${items[@]}"; do
+    dev_id="$(printf '%s' "${item}" | jq -r '.devId // empty' 2>/dev/null || true)"
+    lab_ids="$(printf '%s' "${item}" | jq -r '.labIds // empty' 2>/dev/null || true)"
+    begin="$(printf '%s' "${item}" | jq -r '.begin // empty' 2>/dev/null || true)"
+    end="$(printf '%s' "${item}" | jq -r '.end // empty' 2>/dev/null || true)"
+    test_name="$(printf '%s' "${item}" | jq -r '.testName // empty' 2>/dev/null || true)"
+    members="$(printf '%s' "${item}" | jq -r '.member_accnos_csv // empty' 2>/dev/null || true)"
+    kind="$(printf '%s' "${item}" | jq -r '.member_kind // "1"' 2>/dev/null || true)"
+    target_date="${begin:0:10}"
+
+    # 只抢明天及以后，绝不抢今天（避免需现场刷卡）；过期项直接丢弃，避免永远占着列表刷日志。
+    days="$(core_days_between "${target_date}" "${today}")"
+    if [[ ! "${days}" =~ ^-?[0-9]+$ ]] || (( days <= 0 )); then
+      _bg_log "放弃过期抢约：${begin}"
+      removed=1
+      continue
+    fi
+
+    # 登录（复用会话）并查询该分类当天空闲时段。
+    if ! booking_ensure_session "${BUPTY_ACCOUNT}" "${BUPTY_PASSWORD}"; then
+      _bg_log "抢约登录失败：${BUPTY_ERR:-未知错误}"
+      new_pending+="${item}"$'\n'
+      continue
+    fi
+    local rooms_tmp rooms free_hit
+    rooms_tmp="$(mktemp)"
+    if ! booking_fetch_rooms "${lab_ids}" "${target_date}" > "${rooms_tmp}"; then
+      _bg_log "抢约查询失败（${begin}）：${BUPTY_ERR:-未知错误}"
+      rm -f "${rooms_tmp}"
+      new_pending+="${item}"$'\n'
+      continue
+    fi
+    rooms="$(cat "${rooms_tmp}")"
+    rm -f "${rooms_tmp}"
+
+    # 目标 [begin,end] 是否已落入某个空闲时段。
+    free_hit="$(printf '%s' "${rooms}" | jq -r --arg id "${dev_id}" --arg b "${begin:11}" --arg e "${end:11}" '
+      [.[] | select(.devId == $id) | .free[] | select(.start <= $b and .end >= $e)] | length' 2>/dev/null || true)"
+    if [[ "${free_hit}" == "0" || -z "${free_hit}" ]]; then
+      new_pending+="${item}"$'\n'
+      continue
+    fi
+
+    # 空闲则下单。
+    if booking_submit "${dev_id}" "${begin}" "${end}" "${test_name}" "${members}" "${kind}" >/dev/null; then
+      _bg_log "抢约成功：${begin} ${end}"
+      notify_send "研讨间抢约成功" "${begin} ${end} · ${test_name}"
+      removed=1
+      continue
+    fi
+
+    # 下单失败：永久性错误（连续预约/禁用/违约）直接丢弃并通知；临时错误有限重试（最多 3 次）。
+    if [[ "${BUPTY_ERR:-}" == *"不能连续预约"* || "${BUPTY_ERR:-}" == *"禁用"* || "${BUPTY_ERR:-}" == *"违约"* ]]; then
+      _bg_log "放弃抢约（${begin}）：${BUPTY_ERR:-未知错误}"
+      notify_send "研讨间抢约失败" "${begin} ${end} · ${BUPTY_ERR:-未知错误}"
+      removed=1
+      continue
+    fi
+    item="$(printf '%s' "${item}" | jq -c '.tries = ((.tries // 0) + 1)' 2>/dev/null || printf '%s' "${item}")"
+    tries="$(printf '%s' "${item}" | jq -r '.tries // 0' 2>/dev/null || true)"
+    if [[ "${tries}" =~ ^[0-9]+$ ]] && (( tries >= 3 )); then
+      _bg_log "放弃抢约（${begin}）：多次下单失败（${BUPTY_ERR:-未知错误}）"
+      removed=1
+      continue
+    fi
+    _bg_log "抢约下单失败（${begin}）：${BUPTY_ERR:-未知错误}"
+    new_pending+="${item}"$'\n'
+  done
+
+  if (( removed )); then
+    booking_pending_save "${new_pending}"
+  fi
+  return 0
+}
+
 # 按分钟睡眠，但每秒检查一次停止标志，便于 SIGTERM/SIGINT 优雅退出。
 _background_sleep_minutes() {
   local mins="$1" total i
@@ -180,8 +281,15 @@ background_run() {
     _bg_log "未找到凭据，后台模式退出。"
     return 0
   fi
-  if [[ "$(settings_get notify_enabled)" != "true" || "$(settings_get autostart_enabled)" != "true" ]]; then
-    _bg_log "紧急 DDL 通知或自启动未开启，后台模式退出。"
+  local want_ddl=0 want_autobook=0
+  if [[ "$(settings_get notify_enabled)" == "true" && "$(settings_get autostart_enabled)" == "true" ]]; then
+    want_ddl=1
+  fi
+  if [[ "$(settings_get auto_book_enabled)" == "true" ]]; then
+    want_autobook=1
+  fi
+  if (( !want_ddl && !want_autobook )); then
+    _bg_log "紧急 DDL 通知与自动抢约均未开启，后台模式退出。"
     return 0
   fi
 
@@ -192,10 +300,19 @@ background_run() {
   set +e
   local interval
   while [[ "${_bg_running}" -eq 1 ]]; do
-    background_check_once
+    if (( want_ddl )); then
+      background_check_once
+    fi
+    if (( want_autobook )); then
+      autobook_run_once
+    fi
     interval="$(settings_get notify_interval)"
     if ! [[ "${interval}" =~ ^[0-9]+$ ]]; then
       interval=60
+    fi
+    if (( want_autobook )); then
+      # 抢约需要较快轮询（约 60 秒一次），DDL 通知靠去重避免重复打扰。
+      interval=1
     fi
     _background_sleep_minutes "${interval}" || break
   done

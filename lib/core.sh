@@ -230,7 +230,10 @@ _core_cols_raw() {
   # 会把少数 Unicode 判「窄(N)」的字符一并划进歧义类。终端只加宽 Ambiguous、
   # 不加宽 Narrow，所以这两个字符在任何终端里恒为 1 列，必须特判；否则在 CJK 终端
   # （BUPTY_AMBIG_W=2）上引擎会多算 1 列，而终端只画 1 列，于是整行短 1 列：
-  #   › U+203A —— 7 个视图的选择行标记（整行右补空格，表现为高亮底色短 1 列）
+  #   › U+203A —— 9 个视图的选择行标记。行模板的预算已按「恒 1 列」定死：
+  #               前缀 `" › "` 3 列 + 正文 `UI_COLS - 3` = 恰好 UI_COLS（见
+  #               tests/unit_row_width.sh）。此特判在两种 ambig 档下都生效，
+  #               所以那批行的宽度与 BUPTY_AMBIG_W 无关
   #   ▸ U+25B8 —— 首页档位 B 卡片的未选中标记（在框内，表现为右边框比选中的
   #               ▶ U+25B6 那一行左移 1 列。▶ 是真正的 Ambiguous，不受此处影响）
   # 注意：在 BUPTY_AMBIG_W=1 下本特判是**空操作**（歧义类也按 1 列算），
@@ -655,8 +658,15 @@ core_pad() {
 # 按显示宽度截断文本并补空格到指定宽度。参数：<文本> <宽度>
 # 截断从尾部整字符裁剪（绝不劈开 UTF-8），每砍一个字符就直接扣掉它的列数，
 # 不必重算整串宽度；字符串只会变短，因此循环必然终止。
-core_fit() {
-  local s="${1:-}" width="${2:-0}"
+# 结果同时写入全局 _CORE_FIT_OUT（已含补齐空格），供渲染热循环直接用字符串拼接取用；
+# core_fit 只负责把它打印出来。
+# 取舍：theirs 的 _core_fit_compute 是「无 fork 计算内核」这个接口（热循环要的就是不 fork），
+# 但它自带的宽度模型是 cp>255 就按 2 列、循环上界取 ${#s}——和本分支实测 East Asian Width
+# 的 _core_width 是两套模型，同一行在两处会被算成不同宽度而对不齐。故保留接口、换内核：
+# 两个入口共用 _core_width / _core_chop_last，宽度只此一家。_CORE_FIT_OUT 用 printf -v
+# 直接赋值，仍然不 fork（写成 _CORE_FIT_OUT="$(core_fit ...)" 才是又退回 fork）。
+_core_fit_compute() {
+  local s="${1:-}" width="${2:-0}" pad
   (( width < 0 )) && width=0
   _core_width "${s}"
   while (( _CORE_W > width )); do
@@ -665,8 +675,15 @@ core_fit() {
     _core_cols_raw "${_CORE_CP}"
     _CORE_W=$((_CORE_W - _CORE_COLS))
   done
-  printf '%s' "${s}"
-  printf '%*s' "$((width - _CORE_W))" ''
+  pad=$(( width - _CORE_W ))
+  (( pad < 0 )) && pad=0
+  printf -v _CORE_FIT_OUT '%s%*s' "${s}" "${pad}" ''
+  return 0
+}
+
+core_fit() {
+  _core_fit_compute "${1:-}" "${2:-0}"
+  printf '%s' "${_CORE_FIT_OUT}"
   return 0
 }
 

@@ -152,8 +152,9 @@ _schedule_day_rows() {
   d="$(_schedule_day)"
   SCHEDULE_DAY_ROWS="${SCHEDULE_DAY_MAP[${d}]:-}"
   if [[ -n "${SCHEDULE_DAY_ROWS}" ]]; then
-    SCHEDULE_DAY_COUNT="$(wc -l <<< "${SCHEDULE_DAY_ROWS}" 2>/dev/null || echo 0)"
-    SCHEDULE_DAY_COUNT="${SCHEDULE_DAY_COUNT//[^0-9]/}"
+    local -a _rows
+    readarray -t _rows <<< "${SCHEDULE_DAY_ROWS}"
+    SCHEDULE_DAY_COUNT="${#_rows[@]}"
   fi
 }
 
@@ -218,8 +219,12 @@ _schedule_cell_text() {
 }
 
 # 节次网格：列 = 周一..周日，行 = 节次区间，选中日列高亮、今天列轻标记。
+# slot_rows = 实际画出的节次行数上限（省略 = 画满 min_slot..max_slot）。
+# 矮窗下网格必须能瘦身：网格是**固定块**（上下边框 + 表头 + 分隔 = 4 行恒定），
+# 它若把 body 吃完，帧就会顶穿终端（60x20 曾实测 23 行 > 20）。瘦身只减节次行，
+# 不碰那 4 行骨架——只留 1 个节次行的网格仍是完整可读的表格。
 _schedule_grid() {
-  local min_slot="$1" max_slot="$2"
+  local min_slot="$1" max_slot="$2" slot_rows="${3:-}"
   local day_sel today
   day_sel="$(_schedule_day)"
   today="$(_schedule_today)"
@@ -242,10 +247,11 @@ _schedule_grid() {
 
   # 表头。
   printf ' %s' "${_UI_BOX_V}"
-  printf '%s' "$(ui_paint muted "$(core_fit '节次' "${lw}")")"
+  _core_fit_compute '节次' "${lw}"
+  printf '%s%s%s' "${UI_MUTED}" "${_CORE_FIT_OUT}" "${UI_RESET}"
   printf '%s' "${_UI_BOX_V}"
+  local label flabel
   for d in 1 2 3 4 5 6 7; do
-    local label
     case "${d}" in
       1) label="周一" ;;
       2) label="周二" ;;
@@ -255,12 +261,14 @@ _schedule_grid() {
       6) label="周六" ;;
       7) label="周日" ;;
     esac
+    _core_fit_compute "${label}" "${cw}"
+    flabel="${_CORE_FIT_OUT}"
     if (( d == day_sel )); then
-      printf '%s' "$(ui_paint hl "$(core_fit "${label}" "${cw}")")"
+      printf '%s%s%s' "${UI_HL_FG}" "${flabel}" "${UI_RESET}"
     elif (( d == today )); then
-      printf '%s' "$(ui_paint title "$(core_fit "${label}" "${cw}")")"
+      printf '%s%s%s' "${UI_TITLE}" "${flabel}" "${UI_RESET}"
     else
-      printf '%s' "$(ui_paint muted "$(core_fit "${label}" "${cw}")")"
+      printf '%s%s%s' "${UI_MUTED}" "${flabel}" "${UI_RESET}"
     fi
     printf '%s' "${_UI_BOX_V}"
   done
@@ -276,19 +284,28 @@ _schedule_grid() {
   done
   printf '%s\n' "${_UI_BOX_MR}"
 
-  # 数据行。
-  for ((s = min_slot; s <= max_slot; s++)); do
+  # 数据行。末节次按 slot_rows 截断（留出的行数交给下方日列表，见调用方的反推）。
+  local cell fitted
+  local last_slot="${max_slot}"
+  if [[ -n "${slot_rows}" ]]; then
+    if (( slot_rows < 1 )); then slot_rows=1; fi
+    if (( min_slot + slot_rows - 1 < max_slot )); then
+      last_slot=$(( min_slot + slot_rows - 1 ))
+    fi
+  fi
+  for ((s = min_slot; s <= last_slot; s++)); do
     printf ' %s' "${_UI_BOX_V}"
-    printf '%s' "$(core_fit "第$((s + 1))节" "${lw}")"
+    _core_fit_compute "第$((s + 1))节" "${lw}"
+    printf '%s' "${_CORE_FIT_OUT}"
     printf '%s' "${_UI_BOX_V}"
     for d in 1 2 3 4 5 6 7; do
-      local cell fitted
-      cell="$(_schedule_cell_text "${d}" "${s}")"
-      fitted="$(core_fit "${cell}" "${cw}")"
+      cell="${SCHEDULE_CELL_MAP["${d}-${s}"]:-}"
+      _core_fit_compute "${cell}" "${cw}"
+      fitted="${_CORE_FIT_OUT}"
       if (( d == day_sel )); then
         printf '%s%s%s' "${UI_HL}" "${fitted}" "${UI_RESET}"
       elif (( d == today )); then
-        printf '%s' "$(ui_paint title "${fitted}")"
+        printf '%s%s%s' "${UI_TITLE}" "${fitted}" "${UI_RESET}"
       else
         printf '%s' "${fitted}"
       fi
@@ -313,8 +330,14 @@ _schedule_day_row() {
   local i="$1"
   local row="${_SCHEDULE_DAY_ROWS[$i]:-}"
   [[ -z "${row}" ]] && return 0
-  local time_range name room week_text line
-  IFS=$'\x1f' read -r time_range name room week_text <<< "${row}"
+  # 参数展开切分 TSV，避免 herestring（fork）。
+  local time_range name room week_text line rest
+  time_range="${row%%$'\x1f'*}"
+  rest="${row#*$'\x1f'}"
+  name="${rest%%$'\x1f'*}"
+  rest="${rest#*$'\x1f'}"
+  room="${rest%%$'\x1f'*}"
+  week_text="${rest#*$'\x1f'}"
 
   if [[ -n "${room}" ]]; then
     line="${time_range} ${name} @${room} · ${week_text}"
@@ -323,14 +346,31 @@ _schedule_day_row() {
   fi
 
   if [[ "${i}" -eq "${SCHEDULE_SEL}" ]]; then
-    printf ' %s\n' "$(ui_paint hl "› $(core_fit "${line}" "$((UI_COLS - 4))")")"
+    _core_fit_compute "${line}" "$((UI_COLS - 3))"
+    printf ' %s› %s%s\n' "${UI_HL_FG}" "${_CORE_FIT_OUT}" "${UI_RESET}"
   else
-    printf '   %s\n' "$(core_fit "${line}" "$((UI_COLS - 6))")"
+    _core_fit_compute "${line}" "$((UI_COLS - 3))"
+    printf '   %s\n' "${_CORE_FIT_OUT}"
   fi
 }
 
 # 课程列表（可滚动）。
+# body = 正文可用行数；grid_lines = 上方课程网格实际占的行数（无课时是那 1 行占位）。
+# 本页固定占 (5 + grid_lines) 行：空行 + 信息行 + 空行 + 网格 + 空行 + 「周X课程」标题；
+# 列表可见行数 = body - 5 - grid_lines。F 不是常量——网格高度随本周节次数变化
+# （实测：1 条课、slot 0..1、UI_ROWS=1000 时网格 6 行，正文总 12 行 = 5 + 6 + 1 条列表行）。
 _schedule_render_day() {
+  local body="${1:-}"
+  local grid_lines="${2:-1}"
+  if [[ -z "${body}" ]]; then
+    if declare -F banner_chrome_rows >/dev/null 2>&1; then
+      banner_chrome_rows schedule
+      body=$(( UI_ROWS - BANNER_CHROME_ROWS ))
+    else
+      body=$(( ${UI_ROWS:-24} - 5 ))
+    fi
+  fi
+  (( body < 0 )) && body=0
   local count
   count="$(_schedule_day_count)"
 
@@ -357,8 +397,9 @@ _schedule_render_day() {
     readarray -t _SCHEDULE_DAY_ROWS <<< "${SCHEDULE_DAY_ROWS}"
   fi
 
-  local visible=$((UI_ROWS - 10))
-  if (( visible < 4 )); then visible=4; fi
+  # 列表可见行 = 正文预算 - 本页上方固定行；极小窗口下至少留 1 行。
+  local visible=$(( body - 5 - grid_lines ))
+  if (( visible < 1 )); then visible=1; fi
   if (( SCHEDULE_SEL >= count )); then SCHEDULE_SEL=$((count - 1)); fi
   if (( SCHEDULE_SEL < 0 )); then SCHEDULE_SEL=0; fi
   local offset="${SCHEDULE_OFFSET:-0}"
@@ -374,7 +415,18 @@ _schedule_render_day() {
 }
 
 # 内容渲染：信息行 + 网格 + 按星期课程。
+# body = 正文可用行数，由 tui_render 传入；直接调用（测试）时按唯一口径自行推导。
 _schedule_render_content() {
+  local body="${1:-}"
+  if [[ -z "${body}" ]]; then
+    if declare -F banner_chrome_rows >/dev/null 2>&1; then
+      banner_chrome_rows schedule
+      body=$(( UI_ROWS - BANNER_CHROME_ROWS ))
+    else
+      body=$(( ${UI_ROWS:-24} - 5 ))
+    fi
+  fi
+  (( body < 0 )) && body=0
   printf '\n'
   if [[ -z "${SCHEDULE_DATA}" ]]; then
     if [[ -n "${BUPTY_ERR}" ]]; then
@@ -396,21 +448,45 @@ _schedule_render_content() {
   else
     week_disp="第 ${current_week} 周"
   fi
-  printf ' %s\n' "$(ui_paint muted "学期 ${term_id} · ${week_disp} · 开学 ${term_start_date} · [ ] 切周")"
+  printf ' %s\n' "$(ui_paint muted "$(core_fit "学期 ${term_id} · ${week_disp} · 开学 ${term_start_date} · [ ] 切周" "$((UI_COLS - 2))")")"
   printf '\n'
 
+  # 网格实占行数：上边框 + 表头 + 分隔 + 每个节次一行 + 下边框 = 4 + 节次数。
+  # **网格必须随 body 收缩**：本节固定 5 行（空行 + 信息行 + 空行 + 网格 + 空行 + 「周X课程」
+  # 标题 = 5 + grid_lines），再给日列表留至少 1 行，故网格上限 = body - 6，由 body 反推。
+  # 放不下最小网格（4 行骨架 + 1 个节次行 = 5 行）时整块网格让位给日列表——一个只剩
+  # 1 个节次的残缺表格并不比日列表更有用，而顶穿终端会把页眉顶出屏幕。
+  # 实测：60x20 时 body=13、网格原为 9 行 → 曾渲染 23 行 > 20；现在网格缩到 3 个节次行。
+  local grid_lines=0 grid_slots=""
+  local grid_budget=$(( body - 6 ))
   if [[ -z "${SCHEDULE_MIN_SLOT}" || -z "${SCHEDULE_MAX_SLOT}" ]]; then
-    printf ' %s\n' "$(ui_paint muted '  本周暂无课程')"
-  else
-    _schedule_grid "${SCHEDULE_MIN_SLOT}" "${SCHEDULE_MAX_SLOT}"
+    if (( grid_budget >= 1 )); then
+      printf ' %s\n' "$(ui_paint muted '  本周暂无课程')"
+      grid_lines=1
+    fi
+  elif (( grid_budget >= 5 )); then
+    grid_lines=$(( 4 + SCHEDULE_MAX_SLOT - SCHEDULE_MIN_SLOT + 1 ))
+    if (( grid_lines > grid_budget )); then grid_lines="${grid_budget}"; fi
+    grid_slots=$(( grid_lines - 4 ))
+    _schedule_grid "${SCHEDULE_MIN_SLOT}" "${SCHEDULE_MAX_SLOT}" "${grid_slots}"
   fi
   printf '\n'
 
-  _schedule_render_day
+  _schedule_render_day "${body}" "${grid_lines}"
 }
 
 # 进入视图渲染。首次进入同步拉取（短暂阻塞），随后渲染网格或错误。
 render_schedule() {
+  local body="${1:-}"
+  if [[ -z "${body}" ]]; then
+    if declare -F banner_chrome_rows >/dev/null 2>&1; then
+      banner_chrome_rows schedule
+      body=$(( UI_ROWS - BANNER_CHROME_ROWS ))
+    else
+      body=$(( ${UI_ROWS:-24} - 5 ))
+    fi
+  fi
+  (( body < 0 )) && body=0
   if ! creds_load; then
     printf '\n %s\n' "$(ui_paint muted "$(core_clip '  请先在设置中登录。' "$((UI_COLS - 1))")")"
     return 0
@@ -428,7 +504,7 @@ render_schedule() {
   if [[ -z "${SCHEDULE_DATA}" ]]; then
     printf '\n %s\n' "$(ui_paint muted '  正在加载课表…')"
   else
-    _schedule_render_content
+    _schedule_render_content "${body}"
   fi
 }
 

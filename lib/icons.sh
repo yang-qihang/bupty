@@ -2,7 +2,7 @@
 # icons.sh —— 首页模块卡片图标：12×12 点阵 + 三种终端渲染模式（half/bg/off）。
 #
 # 冻结接口（上层 Agent C 照此调用）：
-#   ICON_KEYS=(assignments schedule classrooms grades exams public)   # 六个图标键
+#   ICON_KEYS=(assignments schedule classrooms grades exams public booking)   # 七个图标键
 #   ICON_W=12     # 显示列数（固定 12 列）
 #   ICON_H=6      # 显示行数（固定 6 行，与 half/bg/off 三种模式完全一致）
 #   ICON_MODE     # 渲染模式：half / bg / off，由 icon_init 探测后确定
@@ -27,7 +27,7 @@ _BUPTY_ICONS_LOADED=1
 # 冻结接口常量
 # ---------------------------------------------------------------------------
 
-ICON_KEYS=(assignments schedule classrooms grades exams public)
+ICON_KEYS=(assignments schedule classrooms grades exams public booking)
 ICON_W=12
 ICON_H=6
 
@@ -53,7 +53,7 @@ _ICON_GRID=()
 # _ICON_INITIALIZED 用 ${_ICON_INITIALIZED:-} 检查，不在此预声明。
 
 # ---------------------------------------------------------------------------
-# 内置的六个模块图标（12 列 × 12 行）—— 点阵原样照抄 docs/icon-lab.sh，一个点都不改。
+# 内置的七个模块图标（12 列 × 12 行）—— 点阵原样照抄 docs/icon-lab.sh，一个点都不改。
 # ---------------------------------------------------------------------------
 icon_grid() {
   case "$1" in
@@ -151,6 +151,24 @@ EOF
 .##..##..##.
 ..########..
 ....####....
+EOF
+      ;;
+    booking) # 研讨间：圆桌俯视 + 三人围坐（上 1、下 2）
+      # 桌与人之间各留**整两行点阵**（= 半块渲染里整整一格空行）。
+      # 只留一行的话半块字形会把人的下缘和桌的上缘画进相邻两格，看着像人粘在桌上。
+      cat <<'EOF'
+.....#......
+....###.....
+............
+............
+..########..
+.##########.
+.##########.
+..########..
+............
+............
+..#......#..
+.###....###.
 EOF
       ;;
   esac

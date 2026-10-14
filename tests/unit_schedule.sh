@@ -17,6 +17,8 @@ source "${BUPTY_HOME}/lib/parse.sh"
 # shellcheck disable=SC1090
 source "${BUPTY_HOME}/lib/sjd.sh"
 # shellcheck disable=SC1090
+source "${BUPTY_HOME}/lib/views/schedule.sh"
+# shellcheck disable=SC1090
 source "${BUPTY_HOME}/tests/lib/testlib.sh"
 
 CURRENT_PAYLOAD="$(cat "${BUPTY_HOME}/tests/fixtures/sjd-current-week.json")"
@@ -88,5 +90,22 @@ EXAMS_PAYLOAD="$(cat "${BUPTY_HOME}/tests/fixtures/schedule-exams.synthetic.json
 t_begin "考试不混入课程"
 assert_eq "$(sjd_parse_schedule_courses "${EXAMS_PAYLOAD}")" "[]" \
   "仅含 name/考试字段的对象不解析为课程"
+
+# ---------------------------------------------------------------------------
+# 6. 课程条数计数（_schedule_day_rows → SCHEDULE_DAY_COUNT）
+# ---------------------------------------------------------------------------
+# 直接喂预计算映射：多行 → 计数等于行数；空 → 计数 0。
+t_begin "课程条数计数：多门课程"
+SCHEDULE_DATA='{"placeholder":true}'  # 仅需非空，跳过提前返回。
+SCHEDULE_DAY="3"
+SCHEDULE_DAY_MAP["3"]=$'r1\nr2\nr3'
+_schedule_day_rows
+assert_eq "${SCHEDULE_DAY_COUNT}" "3" "3 行 → 计数 3"
+
+t_begin "课程条数计数：无课"
+SCHEDULE_DAY="5"
+SCHEDULE_DAY_MAP["5"]=""
+_schedule_day_rows
+assert_eq "${SCHEDULE_DAY_COUNT}" "0" "空 → 计数 0"
 
 t_summary

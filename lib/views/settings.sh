@@ -148,9 +148,19 @@ _render_settings_picker() {
   local total="${#UI_THEME_NAMES[@]}"
 
   # ---- 行预算 ----
-  # 正文可用高度 = UI_ROWS - 5（帧顶/帧底等 5 行固定 chrome，见 docs/ARCHITECTURE.md）。
+  # 正文可用行数 = 传进来的 body（tui_render 已按 banner_chrome_rows 唯一口径算好，
+  # 顶栏页签条 / 首页大字符块都会改它）。**不再写死 UI_ROWS - 5**——那正是本页旧口径
+  # 与 chrome 唯一口径差 2 行的根源（旧注释说的就是「帧顶/帧底等 5 行固定 chrome」）。
   # 顶部另有 3 行结构行（空行 / 标题 / 空行），终端压得很矮时逐级砍掉让位给列表。
-  local body=$((UI_ROWS - 5))
+  local body="${1:-}"
+  if [[ -z "${body}" ]]; then
+    if declare -F banner_chrome_rows >/dev/null 2>&1; then
+      banner_chrome_rows settings
+      body=$(( UI_ROWS - BANNER_CHROME_ROWS ))
+    else
+      body=$(( ${UI_ROWS:-24} - 5 ))
+    fi
+  fi
   if (( body < 0 )); then body=0; fi
   local head=3
   if (( body < head + 1 )); then head=1; fi
@@ -196,7 +206,7 @@ _render_settings_picker() {
     if (( i == SETTINGS_PICKER_SEL )); then
       if (( UI_COLS >= 4 )); then
         # 选中行：整行背景高亮（沿用主列表选中行的 UI_HL_FG 口径），core_fit 补齐到满列。
-        printf ' %s\n' "$(ui_paint hl "› $(core_fit "${label}" "$((UI_COLS - 4))")")"
+        printf ' %s\n' "$(ui_paint hl "› $(core_fit "${label}" "$((UI_COLS - 3))")")"
       elif (( UI_COLS >= 1 )); then
         # 连「 › 」都放不下：丢掉标记，只留截断后的标签，保证行宽 <= UI_COLS。
         printf '%s\n' "$(ui_paint hl "$(core_fit "${label}" "${UI_COLS}")")"
@@ -213,9 +223,22 @@ _render_settings_picker() {
 }
 
 render_settings() {
+  # 正文可用行数：显式传入（tui_render 已按 chrome 口径算好）优先；直接调用（测试）时
+  # 按唯一口径 banner_chrome_rows 推导。**不再写死 UI_ROWS - 5**（旧口径漏算页签条 2 行）。
+  local body="${1:-}"
+  if [[ -z "${body}" ]]; then
+    if declare -F banner_chrome_rows >/dev/null 2>&1; then
+      banner_chrome_rows settings
+      body=$(( UI_ROWS - BANNER_CHROME_ROWS ))
+    else
+      body=$(( ${UI_ROWS:-24} - 5 ))
+    fi
+  fi
+  if (( body < 0 )); then body=0; fi
+
   # 选择器打开时整屏接管为 10 项主题列表，不再渲染设置条目。
   if (( ${SETTINGS_PICKER:-0} )); then
-    _render_settings_picker
+    _render_settings_picker "${body}"
     return 0
   fi
 
@@ -224,11 +247,9 @@ render_settings() {
   local total="${#items[@]}"
 
   # ---- 行预算 ----
-  # 正文可用高度 = UI_ROWS - 5（帧顶/帧底等 5 行固定 chrome，见 docs/ARCHITECTURE.md）。
-  # 本页顶部另有 3 行结构行（空行 / 标题 / 空行）。终端压得很矮时逐级砍掉结构行，
-  # 把高度让给条目本身——宁可没有标题，也不要多渲染一行把帧顶穿。
-  local body=$((UI_ROWS - 5))
-  if (( body < 0 )); then body=0; fi
+  # 正文可用高度 = body（见上）。本页顶部另有 3 行结构行（空行 / 标题 / 空行）。
+  # 终端压得很矮时逐级砍掉结构行，把高度让给条目本身——宁可没有标题，也不要多渲染一行
+  # 把帧顶穿。body 由 chrome 口径给出，故这几条阈值与页签条/大字符块自动联动。
   local head=3
   if (( body < head + 1 )); then head=1; fi
   if (( body < head + 1 )); then head=0; fi
@@ -294,7 +315,7 @@ render_settings() {
     if [[ "${i}" -eq "${SETTINGS_SEL}" ]]; then
       local text="${label}：${val}"
       if (( UI_COLS >= 4 )); then
-        printf ' %s\n' "$(ui_paint hl "› $(core_fit "${text}" "$((UI_COLS - 4))")")"
+        printf ' %s\n' "$(ui_paint hl "› $(core_fit "${text}" "$((UI_COLS - 3))")")"
       elif (( UI_COLS >= 1 )); then
         # 连「 › 」都放不下：丢掉标记，只留截断后的正文，保证行宽 <= UI_COLS。
         printf '%s\n' "$(ui_paint hl "$(core_fit "${text}" "${UI_COLS}")")"

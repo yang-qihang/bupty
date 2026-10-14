@@ -20,3 +20,13 @@ cache/
 *.swp
 *~
 .DS_Store
+
+# LaTeX 构建产物（保留 .tex 源码与 .pdf 成品）
+*.aux
+*.nav
+*.out
+*.snm
+*.toc
+
+# beamer [fragile] 帧产生的 verbatim 辅助文件
+*.vrb

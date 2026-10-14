@@ -175,14 +175,29 @@ _grades_render_row() {
   [[ -z "${line}" ]] && return 0
 
   if [[ "${i}" -eq "${GRADES_SEL}" ]]; then
-    printf ' %s\n' "$(ui_paint hl "› $(core_fit "${line}" "$((UI_COLS - 4))")")"
+    _core_fit_compute "${line}" "$((UI_COLS - 3))"
+    printf ' %s› %s%s\n' "${UI_HL_FG}" "${_CORE_FIT_OUT}" "${UI_RESET}"
   else
-    printf '   %s\n' "$(core_fit "${line}" "$((UI_COLS - 6))")"
+    _core_fit_compute "${line}" "$((UI_COLS - 3))"
+    printf '   %s\n' "${_CORE_FIT_OUT}"
   fi
 }
 
 # 内容渲染：信息行 + 成绩列表。
+# body = 正文可用行数（由 tui_render 传入；直接调用时按 banner_chrome_rows 唯一口径推导）。
+# 本页固定 3 行（空行 + 信息行 + 空行），列表可见行数 = body - 3。
+# F=3 是实测值：列表只放 1 条、UI_ROWS=1000 时正文总行数 4，减 1 条列表行即得。
 _grades_render_content() {
+  local body="${1:-}"
+  if [[ -z "${body}" ]]; then
+    if declare -F banner_chrome_rows >/dev/null 2>&1; then
+      banner_chrome_rows grades
+      body=$(( UI_ROWS - BANNER_CHROME_ROWS ))
+    else
+      body=$(( ${UI_ROWS:-24} - 5 ))
+    fi
+  fi
+  (( body < 0 )) && body=0
   printf '\n'
   if [[ -z "${GRADES_DATA}" ]]; then
     if [[ -n "${BUPTY_ERR}" ]]; then
@@ -199,7 +214,7 @@ _grades_render_content() {
   avg="$(printf '%s' "${GRADES_DATA}" | jq -r '.average_grade_point // ""' 2>/dev/null || true)"
   total="$(_grades_count)"
   avg_disp="${avg:-—}"
-  printf ' %s\n' "$(ui_paint muted "学期 ${term_name} · 记录类型 ${record_name} · 平均绩点 ${avg_disp} · 共 ${total} 条 · t/T 切学期 · p 切类型 · ↑↓ 选择 · r 刷新")"
+  printf ' %s\n' "$(ui_paint muted "$(core_fit "学期 ${term_name} · 记录类型 ${record_name} · 平均绩点 ${avg_disp} · 共 ${total} 条 · t/T 切学期 · p 切类型 · ↑↓ 选择 · r 刷新" "$((UI_COLS - 2))")")"
   printf '\n'
 
   if (( total == 0 )); then
@@ -213,8 +228,9 @@ _grades_render_content() {
     readarray -t _GRADES_ROWS <<< "${GRADES_ROWS}"
   fi
 
-  local visible=$((UI_ROWS - 8))
-  if (( visible < 4 )); then visible=4; fi
+  # 列表可见行 = 正文预算 - 本页固定 3 行；极小窗口下至少留 1 行。
+  local visible=$(( body - 3 ))
+  if (( visible < 1 )); then visible=1; fi
   if (( GRADES_SEL >= total )); then GRADES_SEL=$((total - 1)); fi
   if (( GRADES_SEL < 0 )); then GRADES_SEL=0; fi
   local offset="${GRADES_OFFSET:-0}"
@@ -248,6 +264,16 @@ grades_fetch_data() {
 }
 
 render_grades() {
+  local body="${1:-}"
+  if [[ -z "${body}" ]]; then
+    if declare -F banner_chrome_rows >/dev/null 2>&1; then
+      banner_chrome_rows grades
+      body=$(( UI_ROWS - BANNER_CHROME_ROWS ))
+    else
+      body=$(( ${UI_ROWS:-24} - 5 ))
+    fi
+  fi
+  (( body < 0 )) && body=0
   if ! creds_load; then
     printf '\n %s\n' "$(ui_paint muted "$(core_clip '  请先在设置中登录。' "$((UI_COLS - 1))")")"
     return 0
@@ -264,7 +290,7 @@ render_grades() {
   if [[ -z "${GRADES_DATA}" ]]; then
     printf '\n %s\n' "$(ui_paint muted '  正在加载成绩…')"
   else
-    _grades_render_content
+    _grades_render_content "${body}"
   fi
 }
 

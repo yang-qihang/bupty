@@ -84,11 +84,18 @@ assert_eq "$(printf '%s' "${FALLBACK}" | jq -c '.[] | select(.date=="2026-10-10"
 # 用于验证「按今天星期取 departures」。当前时刻 10:30 → 08:00/10:00 已发车，12:00 为 next。
 SHUTTLE_PAYLOAD='{
   "schema_version": "1.0",
+  "status": "healthy",
   "items": [
     {
       "id": "n-active",
       "title": "当前班车通知",
       "published_at": "2026-10-13",
+      "source_url": "https://example.com/shuttle/active",
+      "stops": [
+        {"campus": "西土城", "location": "教一楼门口"},
+        {"campus": "沙河", "location": "学生食堂"}
+      ],
+      "notes": ["注意携带校园卡", "节假日另行通知"],
       "schedules": [
         {
           "parse_status": "parsed",
@@ -136,6 +143,20 @@ assert_eq "$(printf '%s' "${SHUTTLE}" | jq -r '.routes[0].departures | length')"
 assert_eq "$(printf '%s' "${SHUTTLE}" | jq -c '[.routes[0].departures[].time]')" '["08:00","10:00","12:00"]' "发车时刻（排除过期 07:00 与周四 11:00）"
 assert_eq "$(printf '%s' "${SHUTTLE}" | jq -c '[.routes[0].departures[].departed]')" '[true,true,false]' "departed 标记"
 assert_eq "$(printf '%s' "${SHUTTLE}" | jq '[.routes[].departures[] | select(.next)] | length')" "1" "next 恰好一个"
+
+# 新增字段：选中通知的 id/source_url/stops/notes 与顶层 status→stale。
+t_begin "班车：新增字段透传"
+assert_eq "$(printf '%s' "${SHUTTLE}" | jq -r '.notice_id')" "n-active" "notice_id"
+assert_eq "$(printf '%s' "${SHUTTLE}" | jq -r '.notice_url')" "https://example.com/shuttle/active" "notice_url"
+assert_eq "$(printf '%s' "${SHUTTLE}" | jq -c '.stops')" \
+  '[{"campus":"西土城","location":"教一楼门口"},{"campus":"沙河","location":"学生食堂"}]' "stops（campus/location 数组）"
+assert_eq "$(printf '%s' "${SHUTTLE}" | jq -c '.notes')" '["注意携带校园卡","节假日另行通知"]' "notes（字符串数组）"
+assert_eq "$(printf '%s' "${SHUTTLE}" | jq -r '.stale')" "false" "status healthy → stale false"
+
+# status=stale 时 stale 应为 true（复用同一 payload，仅改顶层 status）。
+SHUTTLE_STALE="$(_public_parse_shuttle "$(printf '%s' "${SHUTTLE_PAYLOAD}" | jq -c '.status = "stale"')")"
+t_begin "班车：stale 状态"
+assert_eq "$(printf '%s' "${SHUTTLE_STALE}" | jq -r '.stale')" "true" "status stale → stale true"
 
 # 最新通知 parsed 但当前时段无 active → 应放弃且不复活更旧的通知。
 SHUTTLE_ABANDON='{
@@ -187,6 +208,11 @@ t_begin "班车：不复活旧通知"
 assert_eq "$(printf '%s' "${SHUTTLE_ABANDONED}" | jq -r '.status')" "未找到当前生效的班车时刻表" "最新通知 parsed 但无 active → 放弃"
 assert_eq "$(printf '%s' "${SHUTTLE_ABANDONED}" | jq -r '.routes | length')" "0" "routes 为空"
 assert_eq "$(printf '%s' "${SHUTTLE_ABANDONED}" | jq -r '.notice_title')" "" "notice_title 为空"
+assert_eq "$(printf '%s' "${SHUTTLE_ABANDONED}" | jq -r '.notice_id')" "" "notice_id 为空"
+assert_eq "$(printf '%s' "${SHUTTLE_ABANDONED}" | jq -r '.notice_url')" "" "notice_url 为空"
+assert_eq "$(printf '%s' "${SHUTTLE_ABANDONED}" | jq -c '.stops')" "[]" "stops 为空数组"
+assert_eq "$(printf '%s' "${SHUTTLE_ABANDONED}" | jq -c '.notes')" "[]" "notes 为空数组"
+assert_eq "$(printf '%s' "${SHUTTLE_ABANDONED}" | jq -r '.stale')" "false" "无 status → stale false"
 assert_eq "$(printf '%s' "${SHUTTLE_ABANDONED}" | jq -r '.next_departure')" "" "next_departure 为空"
 
 t_begin "班车：schema 校验"

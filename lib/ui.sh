@@ -662,7 +662,7 @@ ui_select_option() {
       label="${opts[$i]#*|}"
       if (( i == sel )); then
         # 选中项：整行背景高亮（与全 app 列表选中一致）。
-        printf '\r\033[K %s%s%s\n' "${UI_HL}" "$(core_fit "› ${label}" "$((UI_COLS - 4))")" "${UI_RESET}"
+        printf '\r\033[K %s%s%s\n' "${UI_HL}" "$(core_fit "› ${label}" "$((UI_COLS - 1))")" "${UI_RESET}"
       else
         printf '\r\033[K   %s\n' "$(ui_paint text "${label}")"
       fi

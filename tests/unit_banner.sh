@@ -9,19 +9,21 @@
 # 覆盖：
 #   1. 宽度：banner_render 的 6 行每一行显示列恰好 47（用 _core_width 量，绝不用 ${#s}
 #      —— █ ═ ║ 是 East Asian Ambiguous，${#s} 量的是字符/字节数，不是显示列）
-#   2. 激活门槛的**边界两侧**：UI_COLS 46/47、UI_ROWS 21/22
+#   2. 激活门槛的**边界两侧**：UI_COLS 46/47、UI_ROWS 按宽度分档（>=79 列要 29 行、
+#      47..78 列要 28 行，都是「块 chrome 11 + 页签条 2 + 该档位 body」），并断言门槛
+#      对行数单调（不许忽 0 忽 1）
 #   3. 降级条件：BUPTY_AMBIG_W != 1 → 关；非 UTF-8 → 关
 #   4. BUPTY_FORCE_BANNER 三态语义（1 强开且**允许**超出 UI_COLS，0 强关，未设置按门槛）
-#   5. **降级路径逐字节一致**：块关闭时，与 git HEAD 导出的干净树逐行比 9 帧
-#      （8 个视图 × 100×30 + 首页 × 46×22）。判据是「差异行集合恰好是 {页脚提示行}」：
-#      除页脚外每一行都必须逐字节相同，而页脚行的差异必须**只由**新增的「c 设置」造成
-#      （cur == head + extra，extra 是 " · c 设置" 的前缀）。这是本轮最重要的不变量，
-#      用真正的跨树对比做，不是断言一个布尔。
+#   5. **开/关底色只差两处已知变换**（同一棵树自比）：同一批 11 帧规格渲染两份，
+#      一份开整屏底色、一份关掉，断言两份输出**逐行逐字节只差两类字节**（详见第 5 节头注）。
+#      这是本轮最重要的不变量：整屏底色只允许影响「每个 reset 后补一次底色」与
+#      「帧首擦屏前发一次底色」这两处，别的字节一个都不许动。
 #   6. 不出块 / 出块时都不溢出一行（在 UI_COLS × UI_ROWS 网格上扫）
 #   7. 居中：块左右留白差 ≤ 1 列，且左位移恰为 floor((UI_COLS-47)/2)
-#   8. chrome：banner_chrome_rows home → 11，任意非 home 视图 → 5
+#   8. chrome：banner_chrome_rows 的冻结口径——base 5（非 home）/ 11（home 出块），
+#      页签条放得下时 +2（→ 13/7），并钉住宽度与高度两条子句的边界两侧
 #   9. banner_render 不写 stdout（污染帧缓冲会毁掉整个渲染）
-#  10. `,` 直达键：每个视图下都能切到 settings；作业页按 `s` 仍能提交作业（回归护栏）
+#  10. `c` 直达键：每个视图下都能切到 settings；作业页按 `s` 仍能提交作业（回归护栏）
 #  11. 幂等：同尺寸重复调用结果一致；改 UI_COLS 后按新尺寸重判（不缓存）
 #
 # 负向对照贯穿其中：宽度链路必须能量出「故意超宽」、`,` 驱动必须能因删掉该分支而变红。
@@ -111,12 +113,26 @@ b_frame_overflow() {
   printf '%s' "${out}"
 }
 
-# 渲染一帧首页并把**原始**行（保留 ANSI）写进 B_RAW。
+# 渲染「状态行 + 大块」并把**原始**行（保留 ANSI）写进 B_RAW：B_RAW[0] 是状态行、
+# B_RAW[1..6] 是块的 6 行。刻意不含页签条（页签条由 tui_render 画，居中判定用不着它，
+# 含进来只会把块的固定下标搅乱）。
 b_header_lines() {
   local line
   B_RAW=()
   TUI_VIEW=home
-  while IFS= read -r line; do B_RAW+=("${line}"); done < <(tui_render_header)
+  while IFS= read -r line; do B_RAW+=("${line}"); done < <(tui_render_statusline)
+  while IFS= read -r line; do B_RAW+=("${line}"); done < <(tui_render_bannerblock)
+}
+
+# 渲染整帧首页（tui_render），保留 ANSI 的原始行写进 B_RAW —— 用来钉死**版式顺序**：
+# 状态行 / 页签条 / 大块 各自必须落在哪一行。与 b_frame_widths 同源但保留颜色。
+b_full_frame() {
+  local line
+  B_RAW=()
+  TUI_VIEW=home
+  TUI_FRAME_FILE="$(mktemp)"
+  while IFS= read -r line; do B_RAW+=("${line}"); done < <(tui_render)
+  rm -f "${TUI_FRAME_FILE}"
 }
 
 # ---------------------------------------------------------------------------
@@ -179,16 +195,90 @@ UI_COLS=46; assert_eq "$(b_gate)" "0" "46 列 < 47 → 不出块（46 是边界�
 UI_COLS=47; assert_eq "$(b_gate)" "1" "47 列 == BANNER_W → 出块（边界上）"
 UI_COLS=48; assert_eq "$(b_gate)" "1" "48 列 → 出块"
 
-t_begin "门槛：UI_ROWS 21/22"
+t_begin "门槛：UI_ROWS 按宽度分档"
+# 高度门槛不是一个平铺常数：块显示后 chrome base=11，页签条再占 2 行，二者加上
+# 「该宽度档位所需的 body」才是门槛（档位表与算式在 lib/banner.sh 的函数头注释里）：
+#   79..97 列 → 首页档位 A2，body 下限 16 → 11 + 2 + 16 = 29
+#   40..78 列 → 首页档位 B， body 下限 15 → 11 + 2 + 15 = 28
+# 这里的期望不由产品函数算出来，而是**扫**出来：b_flip 扫 8..40 行，取最小的、出块的
+# 那一行；扫不到打 none。翻转点必须与上面那条独立算式一致才算过。同时断言整段扫描
+# 单调（一旦翻到 1 就不许再回 0）——否则 WINCH 后块会忽隐忽现。
+b_flip() {  # <UI_COLS> → 最小出块行数，扫不到打 none
+  local c="$1" r
+  UI_COLS="${c}"
+  for ((r = 8; r <= 40; r++)); do
+    UI_ROWS="${r}"
+    [[ "$(b_gate)" == "1" ]] && { printf '%s' "${r}"; return; }
+  done
+  printf 'none'
+}
+b_gate_monotone() {  # <UI_COLS> → 出现「1 之后又回 0」的次数（必须为 0）
+  local c="$1" r prev=-1 g bad=0
+  UI_COLS="${c}"
+  for ((r = 8; r <= 40; r++)); do
+    UI_ROWS="${r}"; g="$(b_gate)"
+    (( g < prev )) && bad=$((bad + 1))
+    prev="${g}"
+  done
+  printf '%s' "${bad}"
+}
+assert_eq "$(b_flip 100)" "29" "100 列（档位 A2，body 16）→ 29 = 11+2+16 才出块"
+assert_eq "$(b_flip 79)"  "29" "79 列（档位 A2 的下沿）→ 同 29"
+assert_eq "$(b_flip 78)"  "28" "78 列（档位 B，body 15）→ 28 = 11+2+15 才出块"
+assert_eq "$(b_flip 47)"  "28" "47 列（刚好放得下块）→ 高度门槛仍 28"
+assert_eq "$(b_flip 46)"  "none" "46 列 → 宽度子句否决，再高也不出块"
+assert_eq "$(b_gate_monotone 100)" "0" "100 列：门槛随行数单调（1 之后不许回 0）"
+assert_eq "$(b_gate_monotone 78)"  "0" "78 列：同上（分档边界不许抖动）"
+
+# 翻转点两侧：翻转行出块，上一行不出块，再上一行也出块。
 UI_COLS=100
-UI_ROWS=20; assert_eq "$(b_gate)" "0" "20 行 < 22 → 不出块"
-UI_ROWS=21; assert_eq "$(b_gate)" "0" "21 行 < 22 → 不出块（21 是边界外）"
-UI_ROWS=22; assert_eq "$(b_gate)" "1" "22 行 == 门槛 → 出块（边界上）"
-UI_ROWS=23; assert_eq "$(b_gate)" "1" "23 行 → 出块"
+UI_ROWS=28; assert_eq "$(b_gate)" "0" "100 列 28 行 < 29 → 不出块（边界外）"
+UI_ROWS=29; assert_eq "$(b_gate)" "1" "100 列 29 行 == 门槛 → 出块（边界上）"
+UI_ROWS=30; assert_eq "$(b_gate)" "1" "100 列 30 行 → 出块"
+UI_COLS=78
+UI_ROWS=27; assert_eq "$(b_gate)" "0" "78 列 27 行 < 28 → 不出块（边界外）"
+UI_ROWS=28; assert_eq "$(b_gate)" "1" "78 列 28 行 == 门槛 → 出块（边界上）"
+
+# 分档门槛要保证的不变量：块一旦显示，页签条的高子句在任何视图下都同时成立，
+# 于是同一尺寸下 9 个视图的 BANNER_TABBAR_ROWS 必须取同一个值——否则切页时页签条
+# 忽隐忽现。（关键是「所有视图相同」，不是「一定等于 2」：47..55 列那档页签条本来就
+# 被宽度子句挡掉，取值应是 0，但 9 个视图仍必须齐。）
+# 扫描式检查（不是只测一个尺寸）：凡 b_gate 说「出块」的 (列,行) 组合，9 个视图的
+# BANNER_TABBAR_ROWS 都必须取同一个值。用扫描而不是钉单点，是为了让这条断言真的
+# 能证伪「把高度门槛降到 22」这类改动——那时 22..24 行会出块，而 home 的高子句
+# (rows-11-2 >= 12) 不成立、其余视图 (rows-5-2) 成立，页签条就在切页时闪烁。
+b_flick_bad=0; b_flick_checked=0; b_flick_on=0
+for b_cols in 100 78 47; do
+  for ((b_r = 20; b_r <= 40; b_r++)); do
+    UI_COLS="${b_cols}" UI_ROWS="${b_r}"
+    [[ "$(b_gate)" == "1" ]] || continue
+    b_flick_on=$((b_flick_on + 1))
+    b_vals=""
+    for b_v in "${TUI_TABS[@]}"; do
+      banner_chrome_rows "${b_v}"
+      b_vals+="${BANNER_TABBAR_ROWS} "
+    done
+    b_first="${b_vals%% *}"
+    b_flick_checked=$((b_flick_checked + 1))
+    for b_x in ${b_vals}; do
+      [[ "${b_x}" == "${b_first}" ]] || { b_flick_bad=$((b_flick_bad + 1)); break; }
+    done
+  done
+done
+assert_eq "${b_flick_checked}" "${b_flick_on}" "每个「出块」尺寸都要真的被检查过（非空集）"
+assert_eq "$(( b_flick_checked >= 20 ))" "1" "出块的尺寸样本必须够多（实测 20..40 行 × 3 档列）"
+(( b_flick_bad == 0 )) || printf 'FAIL [%s] 页签条在 %s 个尺寸上出现跨视图不一致\n' \
+  "${TESTS_NAME}" "${b_flick_bad}"
+assert_eq "${b_flick_bad}" "0" "出块时 9 个视图的 BANNER_TABBAR_ROWS 必须处处一致（页签条不许闪）"
+# 非空集 / 取值锚点：100×29 应放得下页签条（2），47 列那档页签条被宽度子句挡掉（0）。
+UI_COLS=100 UI_ROWS=29; banner_chrome_rows home
+assert_eq "${BANNER_TABBAR_ROWS}" "2" "100×29 下页签条放得下 → 2 行"
+UI_COLS=47 UI_ROWS=29; banner_chrome_rows home
+assert_eq "${BANNER_TABBAR_ROWS}" "0" "47 列：宽度子句否决页签条 → 0 行"
 
 # 两条门槛是与关系：任一不满足都不出块。
-UI_COLS=46 UI_ROWS=22; assert_eq "$(b_gate)" "0" "宽度够否但宽度不足 → 不出块"
-UI_COLS=100 UI_ROWS=21; assert_eq "$(b_gate)" "0" "宽度够但高度不足 → 不出块"
+UI_COLS=46 UI_ROWS=40; assert_eq "$(b_gate)" "0" "宽度不足 → 不出块（高度再高也没用）"
+UI_COLS=100 UI_ROWS=28; assert_eq "$(b_gate)" "0" "宽度够但高度不足 → 不出块"
 
 # ---------------------------------------------------------------------------
 # 3. 降级条件
@@ -247,61 +337,49 @@ BUPTY_AMBIG_W=1 UI_COLS=46 UI_ROWS=50;  assert_eq "$(b_gate)" "0" "未设置 + �
 # ---------------------------------------------------------------------------
 # 5. 降级路径：做完「两种已知字节变换」后逐字节一致（差异只允许在页脚）
 # ---------------------------------------------------------------------------
-# 【前提已破，口径重写】原口径是「差异行集合恰好等于 {页脚提示行}：除页脚外逐字节相同」。
-# 本分支同时加了两个东西，把那个前提**从字面上**打破了：
-#   ① 主题底色 UI_BG —— 帧首多发一次底色、且每个 \033[0m 之后补一次底色；
-#   ② 页脚默认提示串尾部新增 ` · c 设置`，且窄终端改成**按 ' · ' 整段丢弃**截断
-#      （HEAD 是 core_fit 硬切，会切出半截字）。
-# 于是非页脚行也**确实**变了字节。重写的做法是把已知的两处变化**平移掉再严格比**，
-# 而不是把断言放宽成「基本一样就行」：
+# 【口径重写】原口径把工作区跟 `git archive HEAD` 导出的干净树逐字节比。合并后 HEAD
+# 本身就含这个功能、工作区还并进了 main 的并行改动，那个基准自我指涉、彻底失效。
+# 新口径是**同一棵树自比**：同一批帧规格渲染两份，一份开整屏底色（UI_BG = 本主题底色，
+# 即 ui_theme_init 后的正常状态），一份把底色**关掉**（UI_BG 置空、UI_RESET 退回纯
+# \033[0m），断言两份输出**逐行逐字节只差下面两类字节**：
 #
-#   第 1 层（字节级，除页脚外）：只承认两种**从真实 diff 归纳出来**的变换，做完就要求
-#     **逐字节相同**；出现这两种之外的任何差异一律判红并打印双方 %q，视为潜在真实回归。
-#       变换 a：head 行里每个裸 \033[0m 之后补一次本主题底色（这正是 UI_RESET 的定义）；
-#       变换 b：cur 帧首多出的那一次底色发送（紧贴在 \033[2J 之前）。
-#   第 2 层（页脚，新口径，**比旧口径更强**）：期望值由本测试**独立构造**，不调用产品的
-#     截断函数；基准是**完整旧提示串** FULL_HEAD（取自 100×30 那帧的 head 页脚，即未被
-#     截断的那条），而不是窄终端下 head 那条已经被硬切过的半截串。
-#       * 放得下（100×30）：cur == head + " · c 设置"；
-#       * 放不下（46×22 / 30×20）：EXPECTED(cols) = 把 (FULL_HEAD + " · c 设置") 按预算
-#         cols-2 **按 ' · ' 整段整段地**截断（取放得下的最长段前缀），断言 cur(cols) == EXPECTED(cols)。
-#     旧口径下窄终端只要 cur 是「head + 某前缀」就过（head 自己就是半截串）；新口径要求
-#     cur 恰好等于独立算出的整段截断结果，半截字、少丢一段、多丢一段都挡不住。
-# 做法仍是真的把 HEAD 导出成一棵临时树，两棵树在**同一环境**下渲染同样的帧再比。
-# 覆盖 8 个视图 × 100×30（放得下）+ 首页 × 46×22 与 30×20（放不下，两档截断深度），共 10 帧。
-# 为了让「真的在跟改动前比」可证伪：HEAD 树里不含 lib/banner.sh，就再断言 HEAD 的
-# 全部输出里根本不出现 "c 设置"——回滚本功能时这条立刻失效。
-t_begin "降级路径：两种已知变换后逐字节一致（差异只允许在页脚）"
-
-# 从本仓库导出 HEAD 到 <dir>。worktree 的 .git 是文件且可能写着 Windows 盘符路径
-# （WSL 里直接读不了），故先试直接 git -C，再试翻译盘符路径后用 --git-dir。
-b_export_head() {
-  local out="$1" gd wgd
-  mkdir -p "${out}"
-  if git -C "${BUPTY_HOME}" archive HEAD 2>/dev/null | tar -x -C "${out}" 2>/dev/null \
-     && [[ -f "${out}/tui.sh" ]]; then
-    return 0
-  fi
-  gd="$(sed -n 's/^gitdir: //p' "${BUPTY_HOME}/.git" 2>/dev/null)"
-  if [[ -n "${gd}" ]]; then
-    wgd="$(printf '%s' "${gd}" | sed -E 's#^([A-Za-z]):/#/mnt/\L\1/#')"
-    if [[ -d "${wgd}" ]] && git --git-dir="${wgd}" archive HEAD 2>/dev/null | tar -x -C "${out}" 2>/dev/null \
-       && [[ -f "${out}/tui.sh" ]]; then
-      return 0
-    fi
-  fi
-  return 1
-}
+#   变换 a（逐行，全帧）：关底色帧里每一个裸 \033[0m 之后插入一次本主题底色。
+#     这正是 UI_RESET 的定义（core_c_reset + UI_BG），也是对「底色只经由 UI_RESET 出现」
+#     的断言：某处 \033[0m 之后没跟底色 → 按变换 a 补上后仍与开底色帧对不上 → 判红
+#     （真回归：那里底色会断开）。
+#   变换 b（帧首，**恒等映射**）：开底色帧第 1 行必须以「底色 + \033[2J」开头。
+#     关底色帧第 1 行没有这段底色（它开头直接就是 \033[2J），所以变换 b 不改变任何字节
+#     ——逐行比较**发现不了**它，必须单列 B_STRIPPED 标志去钉「帧首确实发过底色」。
+#     （tui_render 起手 `printf '%s' "${UI_BG}"` 再 \033[2J，依赖 BCE 让擦屏自带底色。）
+#
+# 可证伪性（防退化，计数器见下）：
+#   * 空集验证：每帧都必须 bg != no_bg，否则不变量恒真、什么都没验 → b_same_frames 必须为 0；
+#   * 变换 a 必须真的改写字节（b_a_applied ≥ 1），否则「归一化」是恒等映射、白比；
+#   * 变换 b 必须真的命中且一帧不漏（b_b_applied ≥ 1 且 b_b_missing == 0）；
+#   * 每行显示宽度 ≤ UI_COLS（b_overflow_bad == 0）。
+#
+# 页脚（第 2 类断言，期望值由本测试**独立构造**，不调用产品的截断函数）：
+#   * 产品默认提示串写死在测试里（B_DEFAULT_HINT），并断言 tui.sh 里那一条**逐字等于**它；
+#   * 放得下（宽度 ≤ 预算 cols-2）：渲染出的页脚 == B_DEFAULT_HINT；
+#   * 放不下：== b_expect_footer(B_DEFAULT_HINT, cols-2)，即本测试独立实现的
+#     「按 ' · ' 整段整段丢」。
+#   （渲染出的页脚行 = 一个前导空格 + 提示串——前导空格来自 tui_render_footer 的
+#    `printf ' %s'`；比较时把这一格算进去。core_fit 的右侧补齐空格在剥色后一并剥掉。）
+# 帧规格：9 个视图 × 100×30（页脚放得下）+ 首页 × 46×22 与 30×20（放不下，两档截断深度），
+# 共 11 帧。booking 是 main 新加的页，同样纳入这套字节级不变量。
+t_begin "开/关底色只差两处已知变换（逐字节）"
 
 B_WORK="$(mktemp -d)"
-B_HEAD_TREE="${B_WORK}/head"
 B_DUMP="${B_WORK}/dump_frames.sh"
 # 一个进程渲染多帧（每帧前打印一行 '===FRAME view cols rows===' 作分隔），
 # 免得每帧都付一次 source 全套 lib 的启动开销。用 <<'EOF' 原样写入，不展开变量。
+# 参数：<root> <with_bg|no_bg> <specs...>；no_bg 模式在主题/图标/盒子初始化**之后**
+# 把 UI_BG 置空、UI_RESET 退回纯 reset——这是「关底色」的唯一开关，之后帧里就不该再有
+# 任何 UI_BG 字节（测试主体断言：与开底色帧只差那两处已知变换）。
 cat > "${B_DUMP}" <<'DUMP_EOF'
 #!/usr/bin/env bash
 set -uo pipefail
-root="$1"; shift
+root="$1"; mode="$2"; shift 2
 export XDG_CONFIG_HOME="$(mktemp -d)"
 export BUPTY_FORCE_BANNER=0
 export BUPTY_FORCE_UTF8=1
@@ -313,6 +391,10 @@ creds_exists() { return 1; }
 ui_theme_init dark
 icon_init
 ui_box_init
+if [[ "$mode" == "no_bg" ]]; then
+  UI_BG=""
+  UI_RESET="$(core_c_reset)"
+fi
 while (( $# >= 3 )); do
   view="$1"; cols="$2"; rows="$3"; shift 3
   UI_COLS="$cols" UI_ROWS="$rows" TUI_VIEW="$view" HOME_FOCUS=grid HOME_SEL=1
@@ -328,11 +410,12 @@ while (( $# >= 3 )); do
 done
 DUMP_EOF
 
-# 8 个视图各在 100×30（页脚放得下完整提示）比一次；
-# 首页另在 46×22 与 30×20 各比一次（放不下 → 走「按 ' · ' 整段丢弃」的截断，两档深度）。
-B_SPECS=(home 100 30 home 46 22 assignments 100 30 schedule 100 30 \
-         classrooms 100 30 grades 100 30 exams 100 30 public 100 30 settings 100 30 \
-         home 30 20)
+# 9 个视图各在 100×30（页脚放得下完整提示）比一次；首页另在 46×22 与 30×20 各比一次
+# （放不下 → 走「按 ' · ' 整段丢弃」的截断，两档深度），共 11 帧。
+B_VIEWS=(home assignments schedule classrooms grades exams public booking settings)
+B_SPECS=()
+for b_v in "${B_VIEWS[@]}"; do B_SPECS+=("${b_v}" 100 30); done
+B_SPECS+=(home 46 22 home 30 20)
 
 # 两棵树都在 dark 主题下渲染（dump 脚本里写死 ui_theme_init dark），
 # 所以「本主题底色」就是当前 dark 的 UI_BG；为空则两种变换都退化成恒等，断言会立刻红。
@@ -342,8 +425,13 @@ ui_box_init
 B_THEME_BG="${UI_BG}"
 assert_ok test -n "${B_THEME_BG}"
 
-# 两种已知变换（从真实 diff 归纳，规则写在函数体里，一眼能看出「只承认这两处」）。
-# 变换 a：head 行里每个裸 \033[0m → \033[0m + 本主题底色。
+# 产品默认页脚提示串：本测试**写死的完整串**。它必须与 tui.sh 里那一条逐字相同
+# （见下面的源码级断言）——否则谁改了实现却没改测试，立刻红。
+# 放得下时渲染出的页脚就是它；放不下时由 b_expect_footer 独立截断得到期望值。
+B_DEFAULT_HINT='↑↓ 选择 · Enter 进入 · Esc 返回 · q 退出 · Tab 切换 · r 刷新 · c 设置'
+
+# 两种已知变换（规则写死在函数体里，一眼能看出「只承认这两处」）。
+# 变换 a：关底色行里每个裸 \033[0m → \033[0m + 本主题底色（这正是 UI_RESET 的定义）。
 b_bg_after_reset() {
   local s="${1:-}" out=""
   while [[ "${s}" == *$'\033[0m'* ]]; do
@@ -353,9 +441,9 @@ b_bg_after_reset() {
   B_NORM="${out}${s}"
 }
 
-# 变换 b：cur 帧首多出的一次底色发送（**必须**紧贴 \033[2J）。
+# 变换 b：开底色帧第 1 行多出的那一次底色发送（**必须**紧贴 \033[2J）。
 # B_STRIPPED=1 表示这一帧确实发过底色；=0 表示没发（那就是「擦屏处露出终端底色」的真实
-# 回归，调用方必须判红——注意此时本函数是恒等映射，逐行比较**发现不了**，所以必须单列标志）。
+# 回归，调用方必须判红——注意此时本函数是**恒等映射**，逐行比较**发现不了**，所以必须单列标志）。
 b_strip_lead_bg() {
   local s="${1:-}" rest
   B_STRIPPED=0
@@ -396,119 +484,126 @@ b_split_frames() {
   ' "$1"
 }
 
-if b_export_head "${B_HEAD_TREE}"; then
-  head_has_banner=0
-  [[ -f "${B_HEAD_TREE}/lib/banner.sh" ]] && head_has_banner=1
-  bash "${B_DUMP}" "${B_HEAD_TREE}" "${B_SPECS[@]}" > "${B_WORK}/head.txt"
-  bash "${B_DUMP}" "${BUPTY_HOME}"   "${B_SPECS[@]}" > "${B_WORK}/cur.txt"
-  b_split_frames "${B_WORK}/head.txt" "${B_WORK}/head"
-  b_split_frames "${B_WORK}/cur.txt"  "${B_WORK}/cur"
+# 同一棵树、同一批帧规格，渲染「开底色」与「关底色」两份输出。
+bash "${B_DUMP}" "${BUPTY_HOME}" with_bg "${B_SPECS[@]}" > "${B_WORK}/bg.txt"
+bash "${B_DUMP}" "${BUPTY_HOME}" no_bg   "${B_SPECS[@]}" > "${B_WORK}/nobg.txt"
+b_split_frames "${B_WORK}/bg.txt"   "${B_WORK}/bg"
+b_split_frames "${B_WORK}/nobg.txt" "${B_WORK}/nobg"
 
-  b_nframes=$(printf '%s\n' "${B_WORK}"/cur/* | wc -l | tr -d '[:space:]')
-  assert_eq "${b_nframes}" "10" "应转储 10 帧（8 视图 × 100×30 + 首页 × 46×22 + 首页 × 30×20）"
+# 源码级：产品默认提示串必须**逐字等于**本测试写死的 B_DEFAULT_HINT。
+# （tui.sh 那一行形如：`[[ -n "${hint}" ]] || hint="<默认串>"`；取 `hint="` 之后到行尾引号的内容。）
+b_impl_hint="$(grep -F 'hint="↑↓ ' "${BUPTY_HOME}/tui.sh" | head -n1)"
+b_impl_hint="${b_impl_hint#*hint=\"}"
+b_impl_hint="${b_impl_hint%\"}"
+assert_eq "${b_impl_hint}" "${B_DEFAULT_HINT}" \
+  "tui.sh 的默认页脚提示串必须逐字等于测试写死的 B_DEFAULT_HINT"
 
-  # 基准串 FULL_HEAD：第 1 帧（home 100×30，页脚放得下）head 侧的**完整旧提示串**。
-  # 先证明它确实是「未截断」的那条：窄终端（第 2 帧）head 自己的页脚必须比它更短。
-  mapfile -t b_h1 < "${B_WORK}/head/001"
-  b_strip "${b_h1[-1]}"; B_FULL_HEAD="${B_PLAIN}"
-  while [[ "${B_FULL_HEAD}" == *' ' ]]; do B_FULL_HEAD="${B_FULL_HEAD%' '}"; done
-  mapfile -t b_h2 < "${B_WORK}/head/002"
-  b_strip "${b_h2[-1]}"; b_h2f="${B_PLAIN}"
-  while [[ "${b_h2f}" == *' ' ]]; do b_h2f="${b_h2f%' '}"; done
-  assert_ok test "$(b_plain_width "${b_h2f}")" -lt "$(b_plain_width "${B_FULL_HEAD}")"
-  # 新增后的完整提示串 = 完整旧串 + 新增段（顺序与产品一致，见 tui.sh 的默认串）。
-  B_NEW_FULL="${B_FULL_HEAD} · c 设置"
+b_frames=0          # 实际比较的帧数（必须等于帧规格数）
+b_same_frames=0     # bg 帧与 no_bg 帧完全相同的帧数（必须为 0：否则不变量是空集真命题）
+b_diff_lines=0      # 做完变换 a/b 后仍不同的行数（必须为 0）
+b_linecount_bad=0   # bg 与 no_bg 行数不一致的帧数（必须为 0）
+b_overflow_bad=0    # 任一行显示宽度 > UI_COLS 的帧数（必须为 0）
+b_a_applied=0       # 变换 a 真的改写了多少行的字节（0 = 变换是恒等，等于没在做归一化）
+b_b_applied=0       # 变换 b 真的摘掉了多少次帧首底色（0 = 同上）
+b_b_missing=0       # 帧首**没**发底色的帧数（必须为 0；这一项不能靠逐行比较发现）
+b_footer_bad=0      # 页脚 != 独立算出的 EXPECTED 的帧数（必须为 0）
+b_fits_seen=0       # 页脚「放得下」分支实际生效的帧数（防规则退化成空集真命题）
+b_trunc_seen=0      # 页脚「整段截断」分支实际生效的帧数
 
-  b_nonfooter_bad=0   # 第 1 层：两种已知变换后仍有差异的非页脚行数（必须为 0）
-  b_footer_bad=0      # 第 2 层：页脚 != 独立算出的 EXPECTED(cols) 的帧数（必须为 0）
-  b_extra_seen=0      # 放得下的宽度（规则①）实际生效的帧数（防规则退化成空集真命题）
-  b_narrow_seen=0     # 放不下的宽度（规则②整段截断）实际生效的帧数
-  b_a_applied=0       # 变换 a 真的改写了多少行的字节（0 = 变换是恒等，等于没在做归一化）
-  b_b_applied=0       # 变换 b 真的摘掉了多少次帧首底色（0 = 同上）
-  b_b_missing=0       # 帧首**没**发底色的帧数（必须为 0；这一项不能靠逐行比较发现）
-  b_index=0
-  for curf in "${B_WORK}"/cur/*; do
-    b_index=$((b_index + 1))
-    mapfile -t cur_lines  < "${curf}"
-    mapfile -t head_lines < "${B_WORK}/head/$(basename "${curf}")"
-    n=${#cur_lines[@]}
-    assert_eq "${n}" "${#head_lines[@]}" "第 ${b_index} 帧的行数必须与改动前一致"
+for bgf in "${B_WORK}"/bg/*; do
+  b_frames=$((b_frames + 1))
+  mapfile -t bg_lines < "${bgf}"
+  mapfile -t nb_lines < "${B_WORK}/nobg/$(basename "${bgf}")"
+  n=${#bg_lines[@]}
 
-    # 帧标记行（第 0 行）里带着这帧的列数——第 2 层的预算由它算，不写死。
-    b_marker="${cur_lines[0]#===FRAME }"; b_marker="${b_marker%===}"
-    read -r b_view b_cols b_rows <<< "${b_marker}"
-    assert_ok test -n "${b_cols}"
+  # 两帧行数必须相等（这是「同树自比」不依赖固定行数的前提）。
+  if (( n != ${#nb_lines[@]} )); then
+    b_linecount_bad=$((b_linecount_bad + 1))
+    printf 'FAIL [%s] 第 %s 帧：开底色 %s 行 != 关底色 %s 行\n' \
+      "${TESTS_NAME}" "${b_frames}" "${n}" "${#nb_lines[@]}"
+    continue
+  fi
 
-    # ---- 第 1 层：除页脚外，做完两种已知变换后**逐字节相同** ----
-    for ((k = 0; k < n - 1; k++)); do
-      b_bg_after_reset "${head_lines[k]}"; hn="${B_NORM}"     # 变换 a 作用于 head 侧
-      [[ "${hn}" != "${head_lines[k]}" ]] && b_a_applied=$((b_a_applied + 1))
-      cn="${cur_lines[k]}"
-      if (( k == 1 )); then                                   # 变换 b 只作用于 cur 帧首内容行
-        b_strip_lead_bg "${cn}"; cn="${B_NORM}"
-        if (( B_STRIPPED )); then
-          b_b_applied=$((b_b_applied + 1))
-        else
-          # 帧首没发底色 → 变换 b 退化成恒等，逐行比较必然「相等」，必须靠这里判红。
-          b_b_missing=$((b_b_missing + 1))
-          printf 'FAIL [%s] 第 %s 帧帧首没有发出本主题底色（\\033[2J 会擦出终端原底色）\n' \
-            "${TESTS_NAME}" "${b_index}"
-        fi
-      fi
-      [[ "${cn}" == "${hn}" ]] && continue
-      b_nonfooter_bad=$((b_nonfooter_bad + 1))
-      printf 'FAIL [%s] 第 %s 帧第 %s 行：两种已知变换后仍不同（这不在已归纳的两种形式内，可能是真实回归）\n' \
-        "${TESTS_NAME}" "${b_index}" "$((k + 1))"
-      printf '  head→变换a: %q\n  cur      : %q\n' "${hn}" "${cn}"
-    done
+  # 非空集验证：两帧必须**确实不同**；相同则这条不变量恒真、什么都没验。
+  if [[ "${bg_lines[*]}" == "${nb_lines[*]}" ]]; then
+    b_same_frames=$((b_same_frames + 1))
+    printf 'FAIL [%s] 第 %s 帧：开底色与关底色输出完全相同（不变量成了空集真命题）\n' \
+      "${TESTS_NAME}" "${b_frames}"
+  fi
 
-    # ---- 第 2 层：页脚，期望值由测试独立构造 ----
-    b_strip "${head_lines[-1]}"; hf="${B_PLAIN}"
-    while [[ "${hf}" == *' ' ]]; do hf="${hf%' '}"; done
-    b_strip "${cur_lines[-1]}";  cf="${B_PLAIN}"
-    while [[ "${cf}" == *' ' ]]; do cf="${cf%' '}"; done
-    # 规则②（对所有宽度统一适用）：把「完整新提示串」按预算 cols-2 整段截断。
-    b_exp="$(b_expect_footer "${B_NEW_FULL}" "$((b_cols - 2))")"
-    if [[ "${cf}" != "${b_exp}" ]]; then
-      b_footer_bad=$((b_footer_bad + 1))
-      printf 'FAIL [%s] 第 %s 帧（%s 列）页脚 != 独立算出的整段截断结果\n' \
-        "${TESTS_NAME}" "${b_index}" "${b_cols}"
-      printf '  want: %q\n  got : %q\n' "${b_exp}" "${cf}"
+  # 帧标记行（第 0 行）里带着这帧的列数——页脚预算由它算，不写死。
+  b_marker="${bg_lines[0]#===FRAME }"; b_marker="${b_marker%===}"
+  read -r b_view b_cols b_rows <<< "${b_marker}"
+  assert_ok test -n "${b_cols}"
+
+  # ---- 逐行：宽度 ≤ UI_COLS，且关底色行做完变换 a/b 后与开底色行逐字节相同 ----
+  for ((k = 1; k < n; k++)); do
+    b_strip "${bg_lines[k]}"; _core_width "${B_PLAIN}"
+    if (( _CORE_W > b_cols )); then
+      b_overflow_bad=$((b_overflow_bad + 1))
+      printf 'FAIL [%s] 第 %s 帧第 %s 行：显示宽度 %s > UI_COLS %s\n' \
+        "${TESTS_NAME}" "${b_frames}" "$((k + 1))" "${_CORE_W}" "${b_cols}"
     fi
-    # 规则①（放得下的宽度）：cur 必须**恰好**是 head + " · c 设置"。
-    # 判据「放得下」= head 自己的页脚就是完整旧串（head 是 core_fit 硬切，短了就说明切过）。
-    if [[ "$(b_plain_width "${hf}")" == "$(b_plain_width "${B_FULL_HEAD}")" ]]; then
-      b_extra_seen=$((b_extra_seen + 1))
-      if [[ "${cf}" != "${hf} · c 设置" ]]; then
-        b_footer_bad=$((b_footer_bad + 1))
-        printf 'FAIL [%s] 第 %s 帧放得下（%s 列），页脚必须恰为 head + " · c 设置"\n' \
-          "${TESTS_NAME}" "${b_index}" "${b_cols}"
-        printf '  want: %q\n  got : %q\n' "${hf} · c 设置" "${cf}"
+
+    # 变换 a 作用于**关底色**侧：每个裸 \033[0m 后补一次本主题底色。
+    b_bg_after_reset "${nb_lines[k]}"; exp="${B_NORM}"
+    if [[ "${nb_lines[k]}" != "${exp}" ]]; then b_a_applied=$((b_a_applied + 1)); fi
+
+    cn="${bg_lines[k]}"
+    if (( k == 1 )); then
+      # 变换 b 只作用于开底色帧首行：摘掉那一次底色并置 B_STRIPPED 标志。
+      b_strip_lead_bg "${cn}"; cn="${B_NORM}"
+      if (( B_STRIPPED )); then
+        b_b_applied=$((b_b_applied + 1))
+      else
+        # 帧首没发底色 → 变换 b 退化成恒等，逐行比较必然「相等」，必须靠这里判红。
+        b_b_missing=$((b_b_missing + 1))
+        printf 'FAIL [%s] 第 %s 帧帧首没有发出本主题底色（\\033[2J 会擦出终端原底色）\n' \
+          "${TESTS_NAME}" "${b_frames}"
       fi
-    else
-      b_narrow_seen=$((b_narrow_seen + 1))
+    fi
+    if [[ "${cn}" != "${exp}" ]]; then
+      b_diff_lines=$((b_diff_lines + 1))
+      printf 'FAIL [%s] 第 %s 帧第 %s 行：开/关底色差异超出那两处已知变换（可能是真实回归）\n' \
+        "${TESTS_NAME}" "${b_frames}" "$((k + 1))"
+      printf '  no_bg→变换a/中: %q\n  with_bg      : %q\n' "${exp}" "${cn}"
     fi
   done
 
-  assert_eq "${b_nonfooter_bad}" "0" \
-    "除页脚外 10 帧：做完两种已知变换后必须逐字节相同（超出这两种形式的差异 = 潜在回归）"
-  assert_eq "${b_footer_bad}" "0" \
-    "10 帧的页脚都必须等于测试独立算出的 EXPECTED（放得下 = head+增量；放不下 = 整段截断）"
-  # 两条规则都得真的生效过，否则「全绿」可能只是规则退化成空集真命题。
-  assert_ok test "${b_extra_seen}" -ge 1     # 规则①（100×30）确实被验过
-  assert_ok test "${b_narrow_seen}" -ge 2    # 规则②（46×22、30×20 两档）确实被验过
-  # 两种变换必须真的在改写字节：否则「归一化」是恒等，第 1 层断言会静默地什么都没测。
-  assert_ok test "${b_a_applied}" -ge 1
-  assert_ok test "${b_b_applied}" -ge 1
-  assert_eq "${b_b_missing}" "0" "每一帧帧首都必须发出本主题底色（\033[2J 前必须有底色）"
-  if (( head_has_banner == 0 )); then
-    assert_eq "$(grep -c 'c 设置' "${B_WORK}/head.txt" || true)" "0" \
-      "HEAD 树里根本不应出现「c 设置」（证明确在跟改动前比）"
+  # ---- 页脚：期望值由测试独立构造（写死的完整串 or 独立整段截断） ----
+  b_strip "${bg_lines[-1]}"; cf="${B_PLAIN}"
+  while [[ "${cf}" == *' ' ]]; do cf="${cf%' '}"; done
+  b_exp="$(b_expect_footer "${B_DEFAULT_HINT}" "$((b_cols - 2))")"
+  # 渲染出的页脚行 = 一个前导空格（tui_render_footer 的 `printf ' %s'`）+ 提示串。
+  if [[ "${b_exp}" == "${B_DEFAULT_HINT}" ]]; then
+    b_fits_seen=$((b_fits_seen + 1))
+  else
+    b_trunc_seen=$((b_trunc_seen + 1))
   fi
-else
-  # 导不出 HEAD 就说明这条最重要的不变量根本没验证到——如实记失败，不静默跳过。
-  assert_eq "无法导出 HEAD" "已导出" "git archive HEAD 失败，跨树对比未能执行（不静默通过）"
-fi
+  if [[ "${cf}" != " ${b_exp}" ]]; then
+    b_footer_bad=$((b_footer_bad + 1))
+    printf 'FAIL [%s] 第 %s 帧（%s 列）页脚 != 独立算出的期望\n' \
+      "${TESTS_NAME}" "${b_frames}" "${b_cols}"
+    printf '  want: %q\n  got : %q\n' " ${b_exp}" "${cf}"
+  fi
+done
+
+assert_eq "${b_frames}" "11" "应转储 11 帧（9 视图 × 100×30 + 首页 × 46×22 + 首页 × 30×20）"
+assert_eq "${b_linecount_bad}" "0" "开/关底色两帧的行数必须相等"
+assert_eq "${b_same_frames}" "0" \
+  "每帧开/关底色都必须确实不同（相同 = 不变量成了空集真命题）"
+assert_eq "${b_diff_lines}" "0" \
+  "11 帧：关底色行做完那两处已知变换后必须与开底色行逐字节相同（超出即潜在回归）"
+assert_eq "${b_overflow_bad}" "0" "任何一行的显示宽度都不得超过 UI_COLS"
+assert_eq "${b_footer_bad}" "0" \
+  "11 帧的页脚都必须等于测试独立算出的期望（放得下 = 写死的完整串；放不下 = 整段截断）"
+assert_eq "${b_b_missing}" "0" "每一帧帧首都必须发出本主题底色（\033[2J 前必须有底色）"
+# 变换必须真的在改写字节：否则「归一化」是恒等，逐行断言会静默地什么都没测。
+assert_ok test "${b_a_applied}" -ge 1
+assert_ok test "${b_b_applied}" -ge 1
+# 页脚两条分支都得真的生效过，否则「全绿」可能是规则退化成空集真命题。
+assert_ok test "${b_fits_seen}" -ge 1      # 100×30 的 9 帧确实放得下
+assert_ok test "${b_trunc_seen}" -ge 2     # 46×22、30×20 两档确实走到了整段截断
 rm -rf "${B_WORK}"
 
 # ---------------------------------------------------------------------------
@@ -571,7 +666,7 @@ b_center_bad=0
 for cols in 47 48 100 101 120; do
   UI_COLS="${cols}" UI_ROWS=30
   b_header_lines
-  # 第 1 行是状态行，第 2..7 行是块的 6 行。
+  # B_RAW[0] 是状态行，B_RAW[1..6] 是块的 6 行。
   want_left=$(( (cols - BANNER_W) / 2 ))
   for k in 1 2 3 4 5 6; do
     b_strip "${B_RAW[$k]}"
@@ -588,25 +683,201 @@ assert_eq "${b_center_bad}" "0" "块左右留白差必须 ≤ 1 列，且左位�
 unset BUPTY_FORCE_BANNER
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 7b. 版式顺序：页签条固定在状态行正下方（大块之上），不许插到中间去
+# ---------------------------------------------------------------------------
+# 用户 2026-10-14 定的版式：状态行 / 页签条 / 大块 / 正文。这里对**整帧**逐行剥色后
+# 钉死前三者的行号——顺序错了（比如页签条又跑到块下面）必须让本用例变红。
+# 负向对照：把「页签条在第 3 行」写成第 9 行必须失败，证明断言真的在量顺序。
+# 下面是**整帧**（tui_render）的行号，把「页签条插在中间」这个 bug 钉成红灯：
+#   下标 0      状态行（页名 + 账号/+齿轮）
+#   下标 1、3   分隔线
+#   下标 2      页签条（紧贴状态行下方——固定位置）
+#   下标 4..9   大块 6 行（只在首页）
+t_begin "版式顺序：状态行 → 页签条 → 大块"
+BUPTY_FORCE_BANNER=1 BUPTY_AMBIG_W=1 UI_COLS=100 UI_ROWS=30
+HOME_FOCUS=grid HOME_SEL=0
+b_full_frame
+b_strip "${B_RAW[0]}"; b_row0="${B_PLAIN}"
+b_strip "${B_RAW[2]}"; b_row2="${B_PLAIN}"
+# 第 1 行是状态行：含页名，且**不含**任何签的正文（签全在第 3 行）。
+assert_eq "$(printf '%s' "${b_row0}" | grep -c '首页')" "1" "第 1 行必须是状态行（含页名「首页」）"
+case "${b_row0}" in
+  *作业*) assert_eq "状态行混进了页签内容" "" "状态行不得含页签正文「作业」" ;;
+  *) assert_eq "ok" "ok" "状态行不含页签正文「作业」" ;;
+esac
+# 第 3 行（下标 2）是页签条：9 个签必须全在这一行。
+b_row2_bad=0
+for b_lab in "${TUI_TAB_LABELS[@]}"; do
+  case "${b_row2}" in
+    *"${b_lab}"*) ;;
+    *) b_row2_bad=$((b_row2_bad + 1))
+       printf 'FAIL [%s] 页签条缺签「%s」：%s\n' "${TESTS_NAME}" "${b_lab}" "${b_row2}" ;;
+  esac
+done
+assert_eq "${b_row2_bad}" "0" "第 3 行必须是完整页签条（9 个签都在）"
+# 大块首行必须落在第 5 行（下标 4）：状态 1 + 分隔 1 + 页签 1 + 分隔 1 = 4 行 chrome 在其上。
+# 块每行都是「左留白 floor((UI_COLS-47)/2) + 47 列」，与 banner_render 的产出逐字相同——
+# 拿**渲染出来的块本身**做参照：第 5 行的左留白必须与它一致，且不得是页签条/分隔线。
+b_strip "${B_RAW[4]}"
+assert_eq "$(b_leading_spaces "${B_PLAIN}")" "$(( (UI_COLS - BANNER_W) / 2 ))" \
+  "第 5 行必须是块的首行（左留白 = floor((UI_COLS-47)/2)）"
+b_banner_render_matches() {
+  local i line bpad got
+  banner_render "${UI_ACCENT}"
+  bpad=$(( (UI_COLS - BANNER_W) / 2 ))
+  (( bpad < 0 )) && bpad=0
+  for ((i = 0; i < BANNER_H; i++)); do
+    b_strip "${BANNER_ROWS[$i]}"
+    line="${B_PLAIN}"
+    b_strip "${B_RAW[$((4 + i))]}"
+    got="${B_PLAIN:bpad}"
+    [[ "${got:0:BANNER_W}" == "${line}" ]] || {
+      printf '  block row %s: got[%s] want[%s]\n' "$i" "${got:0:BANNER_W}" "${line}" >&2
+      return 1
+    }
+  done
+  return 0
+}
+assert_ok b_banner_render_matches
+# 反向对照：块的 6 行（4..9）里不得再出现页签正文——那正是用户报的「插在中间」。
+b_tab_between=0
+for k in 4 5 6 7 8 9; do
+  b_strip "${B_RAW[$k]}"
+  case "${B_PLAIN}" in
+    *成绩*) b_tab_between=$((b_tab_between + 1)) ;;
+  esac
+done
+assert_eq "${b_tab_between}" "0" "块的 6 行里不得混进页签条（「成绩」不得出现在第 5..10 行）"
+unset BUPTY_FORCE_BANNER
+
+# 7c. 大块只属于首页：BANNER_ACTIVE 是首页专属状态，换视图后必须不许残留
+# ---------------------------------------------------------------------------
+# 这是拆分 tui_render_header 时踩到的真缺陷：判据若直接读 BANNER_ACTIVE，先渲染一帧首页
+# 把它置 1，再切到课表，课表也会照画 6 行 BUPTY（块塌成空行，帧高不变量照样通过）。
+# 判据必须走 chrome 口径（base = chrome - 页签条 > 5）。这里先渲染首页把状态置脏，
+# 再渲染非首页，断言块的首行字形**不出现**在帧里。
+t_begin "大块不残留：首页渲染过之后切到课表不得再画块"
+BUPTY_FORCE_BANNER=1 BUPTY_AMBIG_W=1 UI_COLS=100 UI_ROWS=30
+TUI_VIEW=home HOME_FOCUS=grid HOME_SEL=0
+TUI_FRAME_FILE="$(mktemp)"; tui_render >/dev/null; rm -f "${TUI_FRAME_FILE}"
+assert_eq "${BANNER_ACTIVE}" "1" "前置条件：首页这一帧确实把 BANNER_ACTIVE 置成 1"
+# 块首行的字形（用产品自己的翻译函数取，别在这里复刻映射表）。
+_banner_translate "$(banner_plain_row 0)"
+b_block_line="${_BANNER_TEXT}"
+b_leak=0
+for v in assignments schedule classrooms grades exams public booking settings; do
+  TUI_VIEW="${v}"
+  UI_COLS=100 UI_ROWS=30
+  TUI_FRAME_FILE="$(mktemp)"
+  b_vf="$(tui_render)"
+  rm -f "${TUI_FRAME_FILE}"
+  if printf '%s' "${b_vf}" | grep -qF "${b_block_line}"; then
+    b_leak=$((b_leak + 1))
+    printf 'FAIL [%s] 视图 %s 的帧里出现了大块首行（BANNER_ACTIVE 残留）\n' "${TESTS_NAME}" "${v}"
+  fi
+done
+assert_eq "${b_leak}" "0" "非首页视图的帧里不得出现大字符块（首页状态不得外溢）"
+# 反向对照：同一段检测对**首页**必须命中，证明它不是恒不报。
+TUI_VIEW=home
+TUI_FRAME_FILE="$(mktemp)"; b_hf="$(tui_render)"; rm -f "${TUI_FRAME_FILE}"
+assert_eq "$(printf '%s' "${b_hf}" | grep -cF "${b_block_line}")" "1" \
+  "负向对照：首页的帧里必须命中一次块首行（否则上面的检测恒真）"
+unset BUPTY_FORCE_BANNER
+
+# ---------------------------------------------------------------------------
 # 8. chrome 行数（唯一口径）
 # ---------------------------------------------------------------------------
-t_begin "chrome 行数"
+# base 恒等于「不含页签条」的行数：非 home = 5（顶栏 1 + 分隔 1 + 页脚 3），
+# home 且出块 = 11（状态行 1 + 块 6 + 分隔 1 + 页脚 3）。页签条放得下时整条 +2
+# （页签条 1 行 + 它下面那条分隔线 1 行）→ 13 / 7；任一子句不满足则 +0，回到 11 / 5。
+t_begin "chrome 行数：base 11/5，页签条 +2 → 13/7"
 BUPTY_FORCE_BANNER=1 BUPTY_AMBIG_W=1 UI_COLS=100 UI_ROWS=30
 banner_chrome_rows home
-assert_eq "${BANNER_CHROME_ROWS}" "11" "首页出块 → chrome 11（1 状态行 + 6 块 + 1 分隔 + 3 页脚）"
-# 任意非 home 视图一律 5，即便块本可显示。
-for v in assignments schedule classrooms grades exams public settings; do
+assert_eq "${BANNER_CHROME_ROWS}" "13" "首页出块 + 页签条 → chrome 13（base 11 + 页签条 2）"
+assert_eq "${BANNER_TABBAR_ROWS}" "2" "100×30 下页签条放得下 → 贡献 2 行"
+# 任意非 home 视图 base 一律 5，+ 页签条 2 → 7（即便块本可显示）。
+for v in assignments schedule classrooms grades exams public booking settings; do
   banner_chrome_rows "${v}"
-  assert_eq "${BANNER_CHROME_ROWS}" "5" "视图 ${v} → chrome 5"
+  assert_eq "${BANNER_CHROME_ROWS}" "7" "视图 ${v} → chrome 7（base 5 + 页签条 2）"
 done
 # 省略视图名时取当前视图 TUI_VIEW。
-TUI_VIEW=assignments; banner_chrome_rows; assert_eq "${BANNER_CHROME_ROWS}" "5" "省略参数时取 TUI_VIEW=assignments → 5"
-TUI_VIEW=home; banner_chrome_rows; assert_eq "${BANNER_CHROME_ROWS}" "11" "省略参数时取 TUI_VIEW=home（块开）→ 11"
-# 块关时首页也退回 5。
-BUPTY_FORCE_BANNER=0; banner_chrome_rows home; assert_eq "${BANNER_CHROME_ROWS}" "5" "首页块关 → chrome 5"
+TUI_VIEW=assignments; banner_chrome_rows
+assert_eq "${BANNER_CHROME_ROWS}" "7" "省略参数时取 TUI_VIEW=assignments → 7"
+TUI_VIEW=home; banner_chrome_rows
+assert_eq "${BANNER_CHROME_ROWS}" "13" "省略参数时取 TUI_VIEW=home（块开）→ 13"
+
+# ---- 宽度子句的边界两侧：页签串宽度 + 左右各 1 格留白 <= UI_COLS 才显示 ----
+# 独立算出页签串宽度：TUI_TAB_LABELS 按顺序、签间两个空格相接（加左右留白各 1）。
+b_tw=0
+for ((i = 0; i < ${#TUI_TAB_LABELS[@]}; i++)); do
+  _core_width "${TUI_TAB_LABELS[$i]}"; b_tw=$((b_tw + _CORE_W))
+  if (( i > 0 )); then b_tw=$((b_tw + 2)); fi
+done
+assert_eq "${b_tw}" "54" "9 个签（首页…设置）+ 签间空格的显示宽度必须是 54"
+b_wthresh=$((b_tw + 2))
+assert_eq "${b_wthresh}" "56" "宽度门槛 = 页签串 54 + 左右留白 2 = 56"
+# 高度给足（30 行），只让宽度子句决定；用非 home（base=5）隔离出页签条那 2 行。
+BUPTY_FORCE_BANNER=0 UI_ROWS=30
+UI_COLS="${b_wthresh}"; banner_chrome_rows assignments
+assert_eq "${BANNER_TABBAR_ROWS}" "2" "${b_wthresh} 列恰好放得下 → 显示页签条（边界取等号）"
+assert_eq "${BANNER_CHROME_ROWS}" "7" "放得下时 chrome = base 5 + 2"
+UI_COLS=$((b_wthresh - 1)); banner_chrome_rows assignments
+assert_eq "${BANNER_TABBAR_ROWS}" "0" "$((b_wthresh - 1)) 列差 1 列 → 整条页签条（含下线）隐藏"
+assert_eq "${BANNER_CHROME_ROWS}" "5" "放不下时 chrome 回到 base 5"
+
+# ---- 高度子句的边界两侧：UI_ROWS - base - 2 >= BANNER_TABBAR_MIN_BODY 才显示 ----
+# 门槛 12 是产品实测出来的「任何页显示页签条后仍不顶穿帧高」的最小正文预算；
+# 这里把它钉住（改小会让页签条在极矮窗里顶穿），并用它推门槛行数。
+assert_eq "${BANNER_TABBAR_MIN_BODY}" "12" "页签条高度门槛 BANNER_TABBAR_MIN_BODY 必须为 12"
+UI_COLS=100                       # 宽度给足，避开宽度子句
+# 非 home base=5 → 门槛行数 = 5 + 2 + 12 = 19。
+b_nh_rows=$((5 + 2 + 12))
+UI_ROWS="${b_nh_rows}"; banner_chrome_rows assignments
+assert_eq "${BANNER_TABBAR_ROWS}" "2" "${b_nh_rows} 行恰好够正文 → 显示页签条（边界取等号）"
+assert_eq "${BANNER_CHROME_ROWS}" "7" "非 home 显示页签条 → 7"
+UI_ROWS=$((b_nh_rows - 1)); banner_chrome_rows assignments
+assert_eq "${BANNER_TABBAR_ROWS}" "0" "$((b_nh_rows - 1)) 行差 1 行 → 隐藏页签条"
+assert_eq "${BANNER_CHROME_ROWS}" "5" "隐藏时 chrome 回到 base 5"
+# 首页出块 base=11 → 门槛行数 = 11 + 2 + 12 = 25。
+BUPTY_FORCE_BANNER=1
+b_h_rows=$((11 + 2 + 12))
+UI_ROWS="${b_h_rows}"; banner_chrome_rows home
+assert_eq "${BANNER_CHROME_ROWS}" "13" "首页出块：${b_h_rows} 行恰好够正文 → 13（边界取等号）"
+UI_ROWS=$((b_h_rows - 1)); banner_chrome_rows home
+assert_eq "${BANNER_CHROME_ROWS}" "11" "首页出块：$((b_h_rows - 1)) 行差 1 行 → 退回 base 11"
+
+# 高度子句的目的：页签条显示后帧高不得顶穿 UI_ROWS。在非 home 门槛行数上对每个页签实测。
+# （门槛正是为「任意页都不顶穿」而取各视图最大值的，这里验证它确实做得到。）
+b_fit_bad=0
+UI_ROWS="${b_nh_rows}" UI_COLS=100 BUPTY_FORCE_BANNER=0
+for v in "${TUI_TABS[@]}"; do
+  TUI_VIEW="${v}"
+  banner_chrome_rows "${v}"
+  (( BANNER_TABBAR_ROWS > 0 )) || continue
+  TUI_FRAME_FILE="$(mktemp)"
+  frame="$(tui_render)"; rm -f "${TUI_FRAME_FILE}"
+  # 行数要数**帧里真实的行**：命令替换会吃掉末尾换行，所以不能用
+  # `printf '%s\n' "${frame}" | wc -l`（多算 1 行），也不能用 `grep -c ''`（同样多算 1）。
+  # 补一个哨兵再数 −1，正好还原。
+  nlines=$(printf '%s\n' "${frame}" | wc -l | tr -d '[:space:]')
+  nlines=$(( nlines - 1 ))
+  if (( nlines > UI_ROWS )); then
+    b_fit_bad=$((b_fit_bad + 1))
+    printf 'FAIL [%s] 页签条显示时 %s 页在 %s 行下帧高 %s > UI_ROWS\n' \
+      "${TESTS_NAME}" "${v}" "${UI_ROWS}" "${nlines}"
+  fi
+done
+assert_eq "${b_fit_bad}" "0" "页签条显示时任何页的帧高都不得超过 UI_ROWS"
+TUI_VIEW=home
+
+# 块关时首页退回 base 5（+ 页签条）。
+BUPTY_FORCE_BANNER=0 UI_COLS=100 UI_ROWS=30; banner_chrome_rows home
+assert_eq "${BANNER_CHROME_ROWS}" "7" "首页块关 → base 5 + 页签条 2 = 7"
 unset BUPTY_FORCE_BANNER
-# 未设置且门槛不满足时也退回 5。
-UI_COLS=46 UI_ROWS=30; banner_chrome_rows home; assert_eq "${BANNER_CHROME_ROWS}" "5" "46 列 → 首页 chrome 5"
+# 未设置且宽度门槛不满足时：46 列放不下页签条（56 > 46）→ base 5。
+UI_COLS=46 UI_ROWS=30; banner_chrome_rows home
+assert_eq "${BANNER_CHROME_ROWS}" "5" "46 列（<56）放不下页签条 → 首页 chrome 5"
 TUI_VIEW=home
 
 # ---------------------------------------------------------------------------

@@ -122,14 +122,29 @@ _exams_render_row() {
   [[ -z "${line}" ]] && return 0
 
   if [[ "${i}" -eq "${EXAMS_SEL}" ]]; then
-    printf ' %s\n' "$(ui_paint hl "› $(core_fit "${line}" "$((UI_COLS - 4))")")"
+    _core_fit_compute "${line}" "$((UI_COLS - 3))"
+    printf ' %s› %s%s\n' "${UI_HL_FG}" "${_CORE_FIT_OUT}" "${UI_RESET}"
   else
-    printf '   %s\n' "$(core_fit "${line}" "$((UI_COLS - 6))")"
+    _core_fit_compute "${line}" "$((UI_COLS - 3))"
+    printf '   %s\n' "${_CORE_FIT_OUT}"
   fi
 }
 
 # 内容渲染：信息行 + 考试列表。
+# body = 正文可用行数（由 tui_render 传入；直接调用时按 banner_chrome_rows 唯一口径推导）。
+# 本页固定 3 行（空行 + 信息行 + 空行），列表可见行数 = body - 3。
+# F=3 是实测值：列表只放 1 条、UI_ROWS=1000 时正文总行数 4，减 1 条列表行即得。
 _exams_render_content() {
+  local body="${1:-}"
+  if [[ -z "${body}" ]]; then
+    if declare -F banner_chrome_rows >/dev/null 2>&1; then
+      banner_chrome_rows exams
+      body=$(( UI_ROWS - BANNER_CHROME_ROWS ))
+    else
+      body=$(( ${UI_ROWS:-24} - 5 ))
+    fi
+  fi
+  (( body < 0 )) && body=0
   printf '\n'
   if [[ -z "${EXAMS_DATA}" ]]; then
     if [[ -n "${BUPTY_ERR}" ]]; then
@@ -143,7 +158,7 @@ _exams_render_content() {
   local term_id total
   term_id="$(printf '%s' "${EXAMS_DATA}" | jq -r '.term_id // ""' 2>/dev/null || true)"
   total="$(_exams_count)"
-  printf ' %s\n' "$(ui_paint muted "考试安排 · ${term_id} · 共 ${total} 场 · ↑↓ 选择 · r 刷新")"
+  printf ' %s\n' "$(ui_paint muted "$(core_fit "考试安排 · ${term_id} · 共 ${total} 场 · ↑↓ 选择 · r 刷新" "$((UI_COLS - 2))")")"
   printf '\n'
 
   if (( total == 0 )); then
@@ -157,8 +172,9 @@ _exams_render_content() {
     readarray -t _EXAMS_ROWS <<< "${EXAMS_ROWS}"
   fi
 
-  local visible=$((UI_ROWS - 8))
-  if (( visible < 4 )); then visible=4; fi
+  # 列表可见行 = 正文预算 - 本页固定 3 行；极小窗口下至少留 1 行。
+  local visible=$(( body - 3 ))
+  if (( visible < 1 )); then visible=1; fi
   if (( EXAMS_SEL >= total )); then EXAMS_SEL=$((total - 1)); fi
   if (( EXAMS_SEL < 0 )); then EXAMS_SEL=0; fi
   local offset="${EXAMS_OFFSET:-0}"
@@ -192,6 +208,16 @@ exams_fetch_data() {
 }
 
 render_exams() {
+  local body="${1:-}"
+  if [[ -z "${body}" ]]; then
+    if declare -F banner_chrome_rows >/dev/null 2>&1; then
+      banner_chrome_rows exams
+      body=$(( UI_ROWS - BANNER_CHROME_ROWS ))
+    else
+      body=$(( ${UI_ROWS:-24} - 5 ))
+    fi
+  fi
+  (( body < 0 )) && body=0
   if ! creds_load; then
     printf '\n %s\n' "$(ui_paint muted "$(core_clip '  请先在设置中登录。' "$((UI_COLS - 1))")")"
     return 0
@@ -208,7 +234,7 @@ render_exams() {
   if [[ -z "${EXAMS_DATA}" ]]; then
     printf '\n %s\n' "$(ui_paint muted '  正在加载考试安排…')"
   else
-    _exams_render_content
+    _exams_render_content "${body}"
   fi
 }
 
