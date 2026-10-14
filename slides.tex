@@ -5,7 +5,7 @@
 
 \usepackage[UTF8, scheme=plain]{ctex}
 \usepackage{tikz}
-\usetikzlibrary{positioning, arrows.meta, calc}
+\usetikzlibrary{positioning, arrows.meta}
 
 \usetheme{Madrid}
 \usecolortheme{seahorse}
@@ -30,28 +30,30 @@
 % ============================================================================
 \section{动机}
 
-\begin{frame}{动机：多平台割裂的日常痛点}
+\begin{frame}{动机：信息分散在多个平台}
   \begin{itemize}
-    \setlength\itemsep{0.8em}
-    \item 北邮学生日常要登录多个相互独立的信息系统：
+    \setlength\itemsep{0.9em}
+    \item 北邮学生日常要用的信息，分散在好几个互不相干的系统里：
       \begin{itemize}
-        \item 移动教务（课表、空教室、成绩、考试）
-        \item 教学云 UCloud（课程作业与 DDL）
-        \item 信息门户 / 公共接口（班车、节假日、竞赛 DDL）
-        \item 图书馆研修间预约系统
+        \item 查课表、空教室、成绩、考试 —— 移动教务
+        \item 看作业与截止时间 —— 教学云
+        \item 查班车、节假日、竞赛 —— 公共信息接口
+        \item 预约图书馆研修间 —— 另一个预约系统
       \end{itemize}
-    \item 频繁在各平台之间切换、重复登录，信息分散、易遗漏（尤其作业 DDL 与抢约）。
+    \item 每个系统都要单独打开、单独登录，来回切换很麻烦，还容易漏掉重要信息（比如作业截止、抢约时间）。
   \end{itemize}
 \end{frame}
 
-\begin{frame}{动机：为什么重写、为什么用 Bash}
+\begin{frame}{动机：把它们聚合起来，用 TUI 呈现}
   \begin{itemize}
-    \setlength\itemsep{0.8em}
-    \item 参考项目 \texttt{where\_to\_study} 功能完整，但 CLI 需要传大量参数，操作不直观。
-    \item 我们希望提供一个 \textbf{TUI（终端图形界面）}：方向键选择、Enter 进入、Esc 返回，
-      交互符合直觉。
-    \item 课程要求用 \textbf{Bash} 实现：本项目全部由 Bash + 少量系统工具（\texttt{curl}、\texttt{jq}）构成，
-      无额外运行时依赖。
+    \setlength\itemsep{0.9em}
+    \item \textbf{目标}：把上面这些信息聚合到「一个界面」里，减少来回切换。
+    \item \textbf{为什么是 TUI（终端界面）而不是 CLI / GUI}：
+      \begin{itemize}
+        \item 比 CLI（命令行）更友好：不用记一堆参数和命令，方向键 + Enter 就能操作。
+        \item 比 GUI（图形界面）更轻量：在终端里就能跑，无需图形环境。
+      \end{itemize}
+    \item \textbf{为什么用 Bash}：课程要求；整个程序只用 Bash 加少量系统工具（curl 联网、jq 解析数据）实现，没有额外运行时依赖。
   \end{itemize}
 \end{frame}
 
@@ -82,17 +84,17 @@
 % ============================================================================
 \section{架构}
 
-\begin{frame}{整体架构：分层与模块}
+\begin{frame}{整体架构：分层}
   \begin{center}
     \begin{tikzpicture}[
         font=\small,
         node distance=0.45cm and 0.5cm,
         box/.style={draw, rounded corners=2pt, align=center, fill=blue!6, minimum height=0.72cm},
         arr/.style={-{Stealth}, thick, gray}]
-      \node[box, fill=orange!12] (bin) {bin/bupty（入口 + 后台模式）};
-      \node[box, below=of bin, fill=green!8] (tui) {tui.sh（主事件循环 · 导航栈 · 异步拉取）};
+      \node[box, fill=orange!12] (bin) {bin/bupty（入口）};
+      \node[box, below=of bin, fill=green!8] (tui) {tui.sh（主循环 · 页面切换 · 异步加载）};
       \node[box, below=of tui, fill=blue!8] (views) {lib/views/*.sh（各页面视图）};
-      \node[box, below=of views, fill=purple!8, text width=10cm] (lib) {lib/*.sh（核心库）\\ core · http · session · creds · parse · sjd \\ ucloud · public · booking · settings · background · submit · ui};
+      \node[box, below=of views, fill=purple!8, text width=10cm] (lib) {lib/*.sh（核心库）\\ core · http · session · creds · parse · sjd \\ ucloud · public · booking · settings · ui};
       \node[box, below=of lib, fill=red!8] (net) {学校各平台 HTTPS 接口（教务 / 教学云 / 公共 / 预约）};
 
       \draw[arr] (bin) -- (tui);
@@ -103,63 +105,132 @@
   \end{center}
 \end{frame}
 
-\begin{frame}{数据流：JSON 贯穿始终}
+\begin{frame}{每一层做什么（用大白话）}
   \begin{itemize}
     \setlength\itemsep{0.6em}
-    \item 各网络模块统一输出 \textbf{JSON 字符串}（用 \texttt{jq} 生成 / 消费），模块间不拼接脆弱的分隔符。
-    \item 视图层先做一次 \texttt{jq} \textbf{预计算}（TSV 行缓存），渲染循环内用纯 Bash 读取，不再反复调用 \texttt{jq}。
-    \item 典型链路：网络模块 $\xrightarrow{\texttt{JSON}}$ 视图预计算 $\xrightarrow{\texttt{TSV}}$ 逐行渲染。
+    \item \textbf{bin/bupty}：程序的「大门」。运行它，它负责找到代码所在位置，并把各个模块加载进来，然后启动界面。
+    \item \textbf{tui.sh}：主循环。它一直在等用户按键，把按键交给「当前页面」处理；还负责页面的前进 / 返回（导航栈），以及后台加载数据后的自动刷新。
+    \item \textbf{lib/views/*.sh}：一个个「页面」。每个页面只有两件事：\texttt{render\_xxx} 画界面、\texttt{handle\_xxx\_key} 处理按键。
+    \item \textbf{lib/*.sh}：被各页面共用的「工具箱」，例如网络请求、解析、保存密码、记住登录状态、画颜色等。
+    \item \textbf{学校平台}：真正存放数据的地方。我们不是自己造数据，而是通过 HTTPS 接口去学校服务器「取数」。
   \end{itemize}
 \end{frame}
 
-\begin{frame}{异步加载：进入页面即时显示、后台拉取}
+\begin{frame}{核心库逐个看（lib/*.sh）}
+  \begin{columns}[T]
+    \begin{column}{0.5\textwidth}
+      \begin{itemize}
+        \setlength\itemsep{0.35em}
+        \item \texttt{core.sh}：常量、日志、错误提示、颜色、文本宽度等最基础的工具（不联网）。
+        \item \texttt{http.sh}：封装 curl，统一超时与请求头，返回状态码 + 响应体。
+        \item \texttt{session.sh}：记住登录后拿到的「令牌」，只放内存、不落盘。
+        \item \texttt{creds.sh}：读写账号密码文件（目录 0700、文件 0600，拒绝软链接）。
+        \item \texttt{parse.sh}：纯解析函数（周次展开、节次解析、楼名归一），不联网、方便测试。
+        \item \texttt{sjd.sh}：移动教务——登录、课表、空教室、成绩、考试。
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.5\textwidth}
+      \begin{itemize}
+        \setlength\itemsep{0.35em}
+        \item \texttt{ucloud.sh}：教学云——统一认证、课程列表、作业。
+        \item \texttt{public.sh}：公共接口——班车、节假日、竞赛活动。
+        \item \texttt{booking.sh}：研修间预约——登录、房间与空闲时段、预约、取消、抢约。
+        \item \texttt{settings.sh}：读写设置文件（原子写，避免写一半损坏）。
+        \item \texttt{background.sh}：后台守护——紧急 DDL 弹窗 + 自动抢约。
+        \item \texttt{submit.sh}：作业在线提交。
+        \item \texttt{ui.sh}：界面原语——清屏、边框、颜色、列表、输入框、按键读取。
+      \end{itemize}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{页面视图逐个看（lib/views/*.sh）}
+  \begin{columns}[T]
+    \begin{column}{0.5\textwidth}
+      \begin{itemize}
+        \setlength\itemsep{0.5em}
+        \item \texttt{home.sh}：首页菜单。
+        \item \texttt{assignments.sh}：作业 DDL 页面。
+        \item \texttt{schedule.sh}：课表页面。
+        \item \texttt{classrooms.sh}：空教室页面。
+        \item \texttt{grades.sh}：成绩页面。
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.5\textwidth}
+      \begin{itemize}
+        \setlength\itemsep{0.5em}
+        \item \texttt{exams.sh}：考试页面。
+        \item \texttt{public.sh}：公共查询页面（班车 / 节假日 / 活动）。
+        \item \texttt{booking.sh}：研修间预约页面。
+        \item \texttt{settings.sh}：设置页面。
+      \end{itemize}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{数据如何流动：JSON 一条道走到底}
   \begin{itemize}
-    \setlength\itemsep{0.6em}
-    \item 首次进入某页面时，后台子进程拉取数据（\texttt{\_async\_start}），页面先显示「正在加载…」。
-    \item 主循环在每个超时点轮询（\texttt{\_async\_poll}），完成后回调 \texttt{apply\_<view>} 并重绘。
-    \item 渲染用「帧缓冲」：整帧先写入临时文件再一次性输出，避免逐行重绘闪烁；满屏时页脚末行不带换行，避免顶出页眉。
+    \setlength\itemsep{0.7em}
+    \item \textbf{JSON} 是一种通用的「文本格式」，用键值对表示数据，例如 \texttt{\{"name":"张三","age":20\}}。
+    \item 我们规定：各模块之间传数据，一律用 \textbf{JSON 字符串}，读写都用命令行工具 \texttt{jq} 完成。
+    \item 好处：模块之间只约定「字段名」，不约定「分隔符」，不会因为数据里碰巧出现分隔符而出错。
+    \item 页面显示前，先用 \texttt{jq} 把数据做一次「预计算」整理成一行行的文本；真正逐行画界面时只用 Bash 本身，不再反复调用 \texttt{jq}，因此更快。
+    \item 链路：网络模块 $\xrightarrow{\texttt{JSON}}$ 页面预计算 $\xrightarrow{\texttt{一行行文本}}$ 渲染。
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{异步加载：界面始终不「卡住」}
+  \begin{itemize}
+    \setlength\itemsep{0.7em}
+    \item 传统做法：进入页面 → 联网取数据 → 数据到了才显示。网络慢时，界面会空白或卡住。
+    \item 我们的做法：进入页面后 \textbf{立刻}画出界面框架和「正在加载…」提示，数据在后台悄悄下载，下载完成后自动刷新。
+    \item 实现上：用后台子进程去联网（\texttt{\_async\_start}），主循环每隔一小段时间检查一次是否完成（\texttt{\_async\_poll}），完成就更新页面。
+    \item 渲染用「帧缓冲」：整屏内容先画到临时文件里，再一次性输出到终端，避免一行一行刷出来导致的闪烁。
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{渲染性能：去掉多余的「子进程」}
+  \begin{itemize}
+    \setlength\itemsep{0.7em}
+    \item Bash 里很多写法（比如 \texttt{\$(命令)}、管道）都会额外启动一个「子进程」，每启动一次都要花一点时间。
+    \item 如果一个页面有几十上百行，每行都启动几次子进程，界面就会明显变慢。
+    \item 我们的优化：
+      \begin{itemize}
+        \item 渲染循环里改用 Bash 内置的运算，尽量不启动子进程；
+        \item 计算文字显示宽度用「一遍扫描」的算法（O($n$)），避免反复裁剪导致的 O($n^2$) 卡顿；
+        \item 凭据、活动过滤、班车显示行等只算一次并缓存。
+      \end{itemize}
+    \item 效果：课表、班车等页面从约 200ms 一帧降到约 10--30ms 一帧。
   \end{itemize}
 \end{frame}
 
 % ============================================================================
 \section{设计选择}
 
-\begin{frame}{设计选择（一）：Bash 的模块化}
+\begin{frame}{设计选择：把 Bash 也写得「模块化」}
   \begin{itemize}
-    \setlength\itemsep{0.6em}
-    \item 不写「巨型 shell」，而是按职责拆分为多个 \texttt{source} 加载的模块文件。
-    \item 命名约定：纯解析函数（\texttt{lib/parse.sh}）\textbf{不做网络}，便于离线单测；
-      网络函数返回 \texttt{0/1} 并把结果写 stdout、错误写全局 \texttt{BUPTY\_ERR}。
-    \item 视图 = \texttt{render\_<name>()} + \texttt{handle\_<name>\_key()}，与主循环解耦。
+    \setlength\itemsep{0.7em}
+    \item 不把所有代码塞进一个超大脚本，而是按职责拆成几十个小文件，每个文件只负责一件事。
+    \item Bash 里用 \texttt{source} 把其他文件「引入」进来，效果相当于把这些文件拼接在一起，但代码更清晰、更好维护。
+    \item 命名约定：纯解析函数（\texttt{lib/parse.sh}）\textbf{不联网}，便于离线单元测试；网络函数成功返回 0、失败返回 1，结果写到标准输出、错误写到一个全局变量。
   \end{itemize}
 \end{frame}
 
-\begin{frame}{设计选择（二）：渲染性能}
+\begin{frame}{设计选择：安全}
   \begin{itemize}
-    \setlength\itemsep{0.6em}
-    \item \textbf{消除子进程 fork}：渲染热循环里用无 fork 的 \texttt{\_core\_fit\_compute} 计算显示宽度，
-      用参数展开切分 TSV，避免 \texttt{\$(...)} 与 herestring。
-    \item \textbf{单趟 O($n$) 截断}：中文按 2 列宽截断文本，避免逐字符回退造成的 O($n^2$) 卡顿。
-    \item \textbf{结果缓存}：凭据 / 活动过滤 / 班车显示行只算一次；课表、班车等页从约 200ms 降到约 10--30ms/键。
+    \setlength\itemsep{0.7em}
+    \item 保存密码的目录权限设为 0700（只有本人能进）、文件 0600（只有本人能读写），写入时拒绝软链接，密码绝不打印、不写日志。
+    \item 登录后服务器发的「令牌」（相当于一张通行证）只存在内存里，不写进磁盘；过期后自动重新登录一次。
+    \item 预约系统使用学校的「统一身份认证」（CAS）：在统一登录页登录一次，就能访问多个系统；认证过程全程在同一个会话里顺序完成，一次性参数用后即弃。
   \end{itemize}
 \end{frame}
 
-\begin{frame}{设计选择（三）：安全}
+\begin{frame}{设计选择：可配置与后台}
   \begin{itemize}
-    \setlength\itemsep{0.6em}
-    \item 凭据目录 \texttt{0700}、文件 \texttt{0600}，写入时拒绝符号链接；密码永不打印、不进日志。
-    \item 教务 / 教学云 / 预约的令牌仅存内存，过期自动重登一次；预约使用 CAS 七步认证，
-      全程同一 cookie jar、一次性 execution 用后即弃。
-    \item 会话退出时清理 cookie jar。
-  \end{itemize}
-\end{frame}
-
-\begin{frame}{设计选择（四）：可配置与后台}
-  \begin{itemize}
-    \setlength\itemsep{0.6em}
-    \item 设置持久化到 \texttt{settings.json}（临时文件 + \texttt{mv} 原子写）。
-    \item \texttt{-{}-background} 后台模式：单实例锁，循环拉作业并对「紧急 DDL」弹窗；
-      自动抢约只抢「明天及以后」，永久性错误丢弃、临时错误限次重试。
+    \setlength\itemsep{0.7em}
+    \item 设置持久化到 \texttt{settings.json}，采用「先写临时文件、再原子替换」的方式，避免写一半损坏。
+    \item \texttt{-{}-background} 后台模式：只运行一份（单实例锁），循环拉取作业，对「紧急 DDL」弹窗提醒。
+    \item 自动抢约只抢「明天及以后」的时段；遇到永久性错误（如已被禁用）就放弃并通知，临时错误则限次重试。
   \end{itemize}
 \end{frame}
 
@@ -170,14 +241,13 @@
   \begin{columns}[T]
     \begin{column}{0.55\textwidth}
       \begin{itemize}
-        \item \textbf{单元测试}（\texttt{tests/unit\_*.sh}）：离线、基于 fixture JSON，
-          断言解析 / 组装 / 过滤等纯函数。
-        \item \textbf{渲染快照}：渲染各视图并断言关键文本（去 ANSI），验证界面文案。
+        \item \textbf{单元测试}（\texttt{tests/unit\_*.sh}）：离线、基于预置样例数据，断言解析 / 组装 / 过滤等纯函数的结果。
+        \item \textbf{渲染快照}：渲染各页面并断言关键文字（去掉颜色码），验证界面文案正确。
       \end{itemize}
     \end{column}
     \begin{column}{0.45\textwidth}
       \begin{itemize}
-        \item \textbf{多窗口尺寸自检}：在 80/100/120/60/140 列下断言不溢出、页眉在、无横向换行。
+        \item \textbf{多窗口尺寸自检}：在 80/100/120/60/140 列宽下断言不溢出、标题在、无横向换行。
         \item \textbf{真实网络集成测试}（只读 + 授权）：登录、拉取、预约 $\to$ 取消，验证协议与实现一致。
         \item \textbf{对抗式评审}：实现 / 测试 / 评审由不同 agent 分别完成，不共享上下文。
       \end{itemize}
@@ -192,7 +262,7 @@
         node distance=0.9cm and 0.6cm,
         box/.style={draw, rounded corners=2pt, align=center, fill=blue!6, minimum width=2.4cm, minimum height=0.8cm},
         arr/.style={-{Stealth}, thick, gray}]
-      \node[box, fill=green!10] (rev) {逆向工程\\（理解 API 协议）};
+      \node[box, fill=green!10] (rev) {逆向工程\\（理解接口协议）};
       \node[box, right=of rev, fill=orange!10] (impl) {实现 agent\\（写代码）};
       \node[box, right=of impl, fill=blue!10] (test) {测试 agent\\（写并跑测试）};
       \node[box, right=of test, fill=red!10] (review) {评审 agent\\（对抗式找缺陷）};
@@ -212,10 +282,10 @@
 \begin{frame}{总结}
   \begin{itemize}
     \setlength\itemsep{0.8em}
-    \item 用纯 Bash 实现了一个功能完整、交互友好的北邮信息查询 \textbf{TUI}。
-    \item 核心经验：模块化拆分、JSON 作为数据契约、异步加载 + 帧缓冲、渲染热循环去 fork、O(n) 宽度计算。
+    \item 用纯 Bash 实现了一个功能完整、交互友好的北邮信息查询 \textbf{TUI}，把分散的信息聚合到一个界面。
+    \item 核心经验：模块化拆分、JSON 作为数据契约、异步加载 + 帧缓冲、渲染热循环去子进程、O($n$) 宽度计算。
     \item 通过「单元测试 + 渲染快照 + 多尺寸自检 + 真实网络集成 + 对抗式评审」保证了正确性与界面质量。
-    \item 网络协议（教务 / 教学云 / 公共 / 预约）均经真实请求逐条逆向核对并文档化。
+    \item 各系统的网络接口均经真实请求逐条核对并文档化。
   \end{itemize}
   \vspace{1em}
   \centering 谢谢！
