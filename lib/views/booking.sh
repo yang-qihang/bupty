@@ -520,6 +520,22 @@ render_booking() {
 # 表单：收集主题 / 成员 / 开始时间 / 时长（预约与登记抢约共用）
 # ---------------------------------------------------------------------------
 
+# 表单统一入口：清屏并显示标题与当前房间，避免与底层空闲时段列表混叠。
+_booking_form_intro() {
+  local room devname
+  room="$(_booking_selected_room)"
+  devname="$(printf '%s' "${room}" | jq -r '.devName // .roomName // ""' 2>/dev/null || true)"
+  ui_clear
+  tui_render_header
+  printf '\n'
+  printf ' %s\n' "$(ui_paint title '预约登记')"
+  if [[ -n "${devname}" ]]; then
+    printf ' %s\n' "$(ui_paint muted "  房间：${devname}")"
+  fi
+  printf ' %s\n' "$(ui_paint muted '  Esc 任一步可取消')"
+  printf '\n'
+}
+
 _booking_collect_request() {
   local dev_id="$1" min_user="$2" max_user="$3" interval="$4" minr="$5" maxr="$6" date="$7" slot_start="$8" slot_end="$9"
 
@@ -640,6 +656,7 @@ _booking_do_book() {
   [[ -z "${slot}" || "${slot}" == "null" ]] && { core_err "请先选择空闲时段。"; return 1; }
   slot_start="$(printf '%s' "${slot}" | jq -r '.start // ""' 2>/dev/null || true)"
   slot_end="$(printf '%s' "${slot}" | jq -r '.end // ""' 2>/dev/null || true)"
+  _booking_form_intro
   if ! _booking_collect_request "${dev_id}" "${minu}" "${maxu}" "${interval}" "${minr}" "${maxr}" "${date}" "${slot_start}" "${slot_end}"; then
     return 1
   fi
@@ -668,6 +685,8 @@ _booking_do_autobook() {
   minr="$(printf '%s' "${room}" | jq -r '.minResvTime // 10' 2>/dev/null || true)"
   maxr="$(printf '%s' "${room}" | jq -r '.maxResvTime // 120' 2>/dev/null || true)"
   lab_ids="$(printf '%s' "${BOOKING_ROOMS_DATA}" | jq -r '.labId // empty' 2>/dev/null || true)"
+
+  _booking_form_intro
 
   # 1. 目标日期（默认明天，可输入更晚的日期）。
   local today tomorrow target_date days
