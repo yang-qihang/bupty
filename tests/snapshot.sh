@@ -50,6 +50,19 @@ render_booking_content() {
   ' 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g'
 }
 
+# 渲染「我的预约」页（fixture 两条预约），用于回归：多条时曾因 end 变量与
+# 循环上界同名而崩溃（第二条迭代把 end 重赋为时间串，算术求值报「08 进制」）。
+render_booking_own() {
+  BUPTY_NO_COLOR=1 COLUMNS=80 LINES=24 BUPTY_HOME="${BUPTY_HOME}" bash -c '
+    set -uo pipefail
+    source "${BUPTY_HOME}/tui.sh"
+    BOOKING_OWN="$(cat "${BUPTY_HOME}/tests/fixtures/booking-own-list.json")"
+    BOOKING_OWN_LOADED=1
+    BOOKING_TAB=1
+    _booking_render_own
+  ' 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g'
+}
+
 t_begin "首页渲染"
 home="$(render_view home)"
 assert_ok grep -q '首页' <<< "${home}"
@@ -93,6 +106,11 @@ bk="$(render_booking_content)"
 assert_ok grep -qE '^ 研讨间$' <<< "${bk}"
 assert_ok grep -q '沙河校区·一楼·朗读亭' <<< "${bk}"
 assert_ok grep -q '红色主题阅览室' <<< "${bk}"
+
+t_begin "研讨间我的预约渲染（多条不崩溃）"
+own="$(render_booking_own)"
+assert_ok grep -q '研讨间314 · 2026-10-15 08:00 ~ 2026-10-15 08:30' <<< "${own}"
+assert_ok grep -q '研讨间314 · 2026-10-15 09:00 ~ 2026-10-15 09:30' <<< "${own}"
 
 t_begin "渲染输出非空且无 NUL 字节"
 if [[ -n "${home}" ]]; then

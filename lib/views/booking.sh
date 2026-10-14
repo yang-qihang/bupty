@@ -445,15 +445,15 @@ _booking_render_own() {
   if (( end > visible )); then end=$visible; fi
   local offset=0
   if (( BOOKING_OWN_SEL >= end )); then offset=$(( BOOKING_OWN_SEL - end + 1 )); end=$(( BOOKING_OWN_SEL + 1 )); fi
-  local row devname begin end label line
+  local row devname begin end_hm label line
   for ((i = offset; i < end; i++)); do
     row="$(printf '%s' "${BOOKING_OWN}" | jq -c '.['"${i}"'] // null' 2>/dev/null || true)"
     [[ -z "${row}" || "${row}" == "null" ]] && continue
     devname="$(printf '%s' "${row}" | jq -r '.devName // ""' 2>/dev/null || true)"
     begin="$(printf '%s' "${row}" | jq -r '.begin // ""' 2>/dev/null || true)"
-    end="$(printf '%s' "${row}" | jq -r '.end // ""' 2>/dev/null || true)"
+    end_hm="$(printf '%s' "${row}" | jq -r '.end // ""' 2>/dev/null || true)"
     label="$(printf '%s' "${row}" | jq -r '.status_label // ""' 2>/dev/null || true)"
-    line="${devname} · ${begin} ~ ${end} · ${label}"
+    line="${devname} · ${begin} ~ ${end_hm} · ${label}"
     if (( i == BOOKING_OWN_SEL )); then
       _core_fit_compute "${line}" "$((UI_COLS - 3))"
       printf ' %s› %s%s\n' "${UI_HL_FG}" "${_CORE_FIT_OUT}" "${UI_RESET}"
@@ -495,14 +495,14 @@ _booking_render_pending() {
   if (( end > visible )); then end=$visible; fi
   local offset=0
   if (( BOOKING_PENDING_SEL >= end )); then offset=$(( BOOKING_PENDING_SEL - end + 1 )); end=$(( BOOKING_PENDING_SEL + 1 )); fi
-  local i item begin end dev line
+  local i item begin end_hm dev line
   for ((i = offset; i < end; i++)); do
     item="${rows[$i]:-}"
     [[ -z "${item}" ]] && continue
     begin="$(printf '%s' "${item}" | jq -r '.begin // ""' 2>/dev/null || true)"
-    end="$(printf '%s' "${item}" | jq -r '.end // ""' 2>/dev/null || true)"
+    end_hm="$(printf '%s' "${item}" | jq -r '.end // ""' 2>/dev/null || true)"
     dev="$(printf '%s' "${item}" | jq -r '.devName // .devId // ""' 2>/dev/null || true)"
-    line="${begin} ~ ${end} · ${dev}"
+    line="${begin} ~ ${end_hm} · ${dev}"
     if (( i == BOOKING_PENDING_SEL )); then
       _core_fit_compute "${line}" "$((UI_COLS - 3))"
       printf ' %s› %s%s\n' "${UI_HL_FG}" "${_CORE_FIT_OUT}" "${UI_RESET}"

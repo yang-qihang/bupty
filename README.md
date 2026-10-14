@@ -3,11 +3,6 @@
 北邮一站式信息查询**终端界面（TUI）**，用 **Bash** 编写。帮助学生在一个软件里查询课表、
 作业 DDL、空教室、成绩、考试、班车、节假日与活动等信息。
 
-> 本项目是对 [where_to_study](https://github.com/Nemoyuzx/where_to_study)（GPL-3.0-only）
-> 中 CLI 部分的一次 Bash 重写，并把「传大量参数的 CLI」升级为「方向键 / Enter / Backspace
-> 的类图形界面」TUI。协议与数据契约迁移自该项目的 Rust 核心，见
-> [`docs/protocols.md`](docs/protocols.md)。
-
 ## 特性
 
 - **作业 DDL**：聚合教学云全部课程作业，按截止时间升序、标注紧急程度与提交状态。
@@ -44,8 +39,3 @@ bash tests/run.sh       # 单元测试
 bash tests/snapshot.sh  # TUI 渲染快照
 bash tests/live.sh      # 真实网络只读集成测试（需凭据）
 ```
-
-## 许可证
-
-GPL-3.0-only。网络协议与解析逻辑迁移自
-[where_to_study](https://github.com/Nemoyuzx/where_to_study)，特此致谢。
