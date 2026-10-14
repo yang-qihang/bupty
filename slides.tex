@@ -14,7 +14,7 @@
 
 \title{bupty：纯 Bash 的北邮一站式信息查询终端}
 \subtitle{Linux 课程作业 —— 架构设计、实现与测试}
-\author{2025211681}
+\author{杨启航 \quad 郭浩洋}
 \date{2026 年 10 月}
 
 \begin{document}
@@ -135,7 +135,7 @@
         \item \texttt{ucloud.sh}：教学云——统一认证、课程列表、作业。
         \item \texttt{public.sh}：公共接口——班车、节假日、竞赛活动。
         \item \texttt{booking.sh}：研修间预约——登录、房间与空闲时段、预约、取消、抢约。
-        \item \texttt{settings.sh}：读写设置文件（原子写，避免写一半损坏）。
+        \item \texttt{settings.sh}：读写设置文件（先写临时文件再覆盖，避免写坏）。
         \item \texttt{background.sh}：后台守护——紧急 DDL 弹窗 + 自动抢约。
         \item \texttt{submit.sh}：作业在线提交。
         \item \texttt{ui.sh}：界面原语——清屏、边框、颜色、列表、输入框、按键读取。
@@ -197,9 +197,7 @@
     \item 我们的优化：
       \begin{itemize}
         \item 渲染循环里改用 Bash 内置的运算，尽量不启动子进程；
-        \item \textbf{截断文字用「一遍扫描」}：中文占 2 列、英文占 1 列，超长文字要截断。
-          笨办法是「删一个字、把整行重新数一遍」，$n$ 个字最多要做约 $n \times n$ 次（记作 O($n^2$)），文字一长就卡；
-          我们的办法是「从头到尾只扫一遍、边扫边累计宽度、一超过限制就停」，每个字只看一次（记作 O($n$)），再长也不卡。
+        \item 截断超长文字时只从头到尾扫一遍（中文按 2 列、英文按 1 列累计宽度），不反复重数。
         \item 凭据、活动过滤、班车显示行等只算一次并缓存。
       \end{itemize}
     \item 效果：课表、班车等页面从约 200ms 一帧降到约 10--30ms 一帧。
@@ -230,8 +228,8 @@
 \begin{frame}{设计选择：可配置与后台}
   \begin{itemize}
     \setlength\itemsep{0.7em}
-    \item 设置持久化到 \texttt{settings.json}，采用「先写临时文件、再原子替换」的方式，避免写一半损坏。
-    \item \texttt{-{}-background} 后台模式：只运行一份（单实例锁），循环拉取作业，对「紧急 DDL」弹窗提醒。
+    \item 设置持久化到 \texttt{settings.json}：先把新内容写进一个临时文件，确认无误后再一次性覆盖原文件，中途出错也不会写坏。
+    \item \texttt{-{}-background} 后台模式：先检查是否已有另一份在运行、避免重复启动，然后循环拉取作业，对「紧急 DDL」弹窗提醒。
     \item 自动抢约只抢「明天及以后」的时段；遇到永久性错误（如已被禁用）就放弃并通知，临时错误则限次重试。
   \end{itemize}
 \end{frame}
@@ -285,7 +283,7 @@
   \begin{itemize}
     \setlength\itemsep{0.8em}
     \item 用纯 Bash 实现了一个功能完整、交互友好的北邮信息查询 \textbf{TUI}，把分散的信息聚合到一个界面。
-    \item 核心经验：模块化拆分、JSON 作为数据契约、异步加载 + 帧缓冲、渲染热循环去子进程、O($n$) 宽度计算。
+    \item 核心经验：模块化拆分、JSON 作为数据契约、异步加载 + 帧缓冲、渲染热循环去子进程、文字宽度只扫一遍。
     \item 通过「单元测试 + 渲染快照 + 多尺寸自检 + 真实网络集成 + 对抗式评审」保证了正确性与界面质量。
     \item 各系统的网络接口均经真实请求逐条核对并文档化。
   \end{itemize}
